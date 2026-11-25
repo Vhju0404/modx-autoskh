@@ -1,8 +1,15 @@
+<p align="center">
+  <img src="build/promo_banner.png" alt="MOD X · H TEAM — Auto Up Set Kích Hoạt (NRO Chính)" width="100%" />
+</p>
+
 # MOD X · H TEAM — Auto Up Set Kích Hoạt (NRO Chính)
 
-Công cụ quản lý đa tài khoản & tự động săn **Set Kích Hoạt (SKH)** 24/7 cho **Ngọc Rồng Online (Teamobi)**, phát triển bởi **H TEAM**.
+Công cụ quản lý đa tài khoản & tự động săn **Set Kích Hoạt (SKH)** 24/7 cho **Ngọc Rồng Online (Teamobi)**, phát triển miễn phí & công khai **100% mã nguồn (Go + C#)** bởi **H TEAM**.
 
-> 📖 **Xem cẩm nang hướng dẫn chi tiết từng bước từ A → Z:** **[HDSD.md](HDSD.md)**
+> 🔓 **100% FULL MÃ NGUỒN MỞ — NÓI KHÔNG VỚI KEYLOG:**
+> Toàn bộ source Go (QLTK) và C# (Client Mod) đều công khai tại repo này, không obfuscate, tự build lại được chỉ bằng 1 click (`build.bat`). **Không rành đọc code? Cứ quăng thẳng link GitHub này cho AI (ChatGPT / Gemini / Claude) soi sạch từng dòng trước khi buông lời cay đắng "có keylog"!**
+
+> 📖 **Xem cẩm nang hướng dẫn chi tiết từng bước từ A → Z:** **[HDSD.md](HDSD.md)** *(hoặc mở file `HDSD.txt` bằng Notepad trong bản ZIP tải về)*
 
 ---
 
