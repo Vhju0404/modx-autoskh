@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auto Up Set Kích Hoạt</title>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Sidebar Trái: Thương Hiệu + Điều Hướng 5 Tab -->
+    <aside class="sidebar">
+      <div class="brand" id="app-hdr-slot">
+        <div class="brand-logo-wrap" id="hdr-glyph"></div>
+        <div class="brand-text">
+          <div class="brand-title" id="hdr-t1"></div>
+          <div class="brand-sub" id="hdr-t2"></div>
+        </div>
+      </div>
+
+      <nav class="nav-list">
+        <button class="nav-item active" data-tab="accounts">
+          <span class="nav-icon">📋</span>
+          <span>Tài Khoản</span>
+          <span class="nav-badge" id="badge-accounts">0</span>
+        </button>
+        <button class="nav-item" data-tab="profiles">
+          <span class="nav-icon">⚙️</span>
+          <span>Farm Profiles</span>
+          <span class="nav-badge" id="badge-profiles">0</span>
+        </button>
+        <button class="nav-item" data-tab="loot">
+          <span class="nav-icon">🏆</span>
+          <span>Kho SKH &amp; Ghép Set</span>
+          <span class="nav-badge badge-gold" id="badge-skh">0</span>
+        </button>
+        <button class="nav-item" data-tab="proxy">
+          <span class="nav-icon">🌐</span>
+          <span>Proxy Manager</span>
+          <span class="nav-badge" id="badge-proxy">0</span>
+        </button>
+        <button class="nav-item" data-tab="settings">
+          <span class="nav-icon">🛠️</span>
+          <span>VPS · SV · Telegram</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="engine-pill" id="engine-pill">
+          <span class="dot dot-idle" id="engine-dot"></span>
+          <span id="engine-label">Đang nghỉ</span>
+        </div>
+        <div class="side-actions">
+          <button class="btn btn-primary btn-full" id="btn-toggle-autorun">▶ Bật Auto Xoay Vòng</button>
+          <button class="btn btn-danger-ghost btn-full" id="btn-stop-all">⏹ Dừng Toàn Bộ Tab</button>
+          <button class="btn btn-secondary btn-xs btn-full" id="btn-quit-app" title="Tắt hẳn tool khỏi khay hệ thống (đóng cửa sổ trình duyệt bình thường thì tool vẫn chạy ngầm 24/7)">⏻ Thoát Hoàn Toàn</button>
+        </div>
+        <div class="ver-note" id="hdr-foot">Win 2012R2–11 · Tray 24/7</div>
+      </div>
+    </aside>
+
+    <!-- Vùng Nội Dung Chính -->
+    <main class="main-area">
+      <div class="lock-banner hidden" id="sync-lock-bar"></div>
+      <!-- Thanh KPI Tổng Quan -->
+      <header class="topbar">
+        <div class="kpi-strip">
+          <div class="kpi-card">
+            <div class="kpi-label">Tab Đang Chạy</div>
+            <div class="kpi-val" id="kpi-running">0 / 5</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Full Rương (Xong)</div>
+            <div class="kpi-val text-green" id="kpi-done">0</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Tổng Món SKH</div>
+            <div class="kpi-val text-gold" id="kpi-skh">0</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Bộ Đủ 5/5</div>
+            <div class="kpi-val text-emerald" id="kpi-sets">0</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Proxy Live</div>
+            <div class="kpi-val text-sky" id="kpi-proxy">0 / 0</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Cảnh Báo / Lỗi</div>
+            <div class="kpi-val text-red" id="kpi-warn">0</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-secondary" id="btn-toggle-privacy" title="Che sạch tài khoản, nhân vật, proxy, token &amp; tiêu đề cửa sổ game khi quay demo / chụp màn hình">👁 Che TK</button>
+          <button class="btn btn-secondary" id="btn-arrange-grid" title="Sắp xếp lưới tất cả cửa sổ game">⊞ Xếp Cửa Sổ</button>
+          <button class="btn btn-secondary" id="btn-toggle-logs" title="Bật/tắt bảng Log sự kiện">📜 Log</button>
+        </div>
+      </header>
+
+      <!-- Tab Content -->
+      <section class="tab-container">
+        <div class="tab-pane active" id="tab-accounts"></div>
+        <div class="tab-pane" id="tab-profiles"></div>
+        <div class="tab-pane" id="tab-loot"></div>
+        <div class="tab-pane" id="tab-proxy"></div>
+        <div class="tab-pane" id="tab-settings"></div>
+      </section>
+
+      <!-- Khay Log Sự Kiện Thu Gọn -->
+      <div class="log-drawer collapsed" id="log-drawer">
+        <div class="log-drawer-head">
+          <span>📜 Nhật Ký Sự Kiện (FSM &amp; Nổ SKH)</span>
+          <div class="log-drawer-btns">
+            <button class="btn btn-xs btn-secondary" id="btn-clear-logs">Xóa Log</button>
+            <button class="btn btn-xs btn-secondary" id="btn-close-logs">Thu Gọn ▾</button>
+          </div>
+        </div>
+        <div class="log-list" id="log-list"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Context Menu Chuột Phải cho Bảng Tài Khoản -->
+  <div class="ctx-menu hidden" id="ctx-menu"></div>
+
+  <!-- Modal Dùng Chung -->
+  <div class="modal-backdrop hidden" id="modal-backdrop">
+    <div class="modal-box" id="modal-box">
+      <div class="modal-head">
+        <h3 id="modal-title">Tiêu đề</h3>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-foot" id="modal-foot"></div>
+    </div>
+  </div>
+
+  <!-- Toast Thông Báo Nhanh -->
+  <div class="toast-stack" id="toast-stack"></div>
+
+  <script src="js/api.js"></script>
+  <script src="js/tab_accounts.js"></script>
+  <script src="js/tab_profiles.js"></script>
+  <script src="js/tab_loot.js"></script>
+  <script src="js/tab_proxy.js"></script>
+  <script src="js/tab_settings.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

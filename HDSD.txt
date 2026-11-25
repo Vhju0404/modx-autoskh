@@ -1,0 +1,215 @@
+﻿================================================================================
+   MOD X · H TEAM — AUTO UP SET KÍCH HOẠT (NRO CHÍNH)
+   HƯỚNG DẪN SỬ DỤNG CHI TIẾT TỪ A ĐẾN Z (BẢN CHUẨN CHO PC & VPS)
+================================================================================
+
+1. YÊU CẦU MÁY & CÁCH KHỞI ĐỘNG
+--------------------------------------------------------------------------------
+- Hệ điều hành: Windows Server 2012 R2 / 2016 / 2019 / 2022, Windows 10, Win 11.
+- Không cần cài thêm WebView2, .NET hay phần mềm phụ trợ nào khác.
+- Cách mở tool:
+  + Giải nén toàn bộ vào 1 thư mục gọn (vd: C:\ModX_AutoSKH\).
+  + Bấm đúp ModX_HTeam_AutoSKH.exe -> Trình duyệt tự mở bảng điều khiển tại:
+    http://127.0.0.1:20269
+  + Muốn chạy ẩn thẳng xuống khay hệ thống (System Tray) khi mở VPS:
+    ModX_HTeam_AutoSKH.exe --minimized
+
+- Lưu ý cực quan trọng về Chạy Ngầm 24/7:
+  + Khi bấm dấu X đóng trình duyệt QLTK, tool KHÔNG BỊ TẮT (vẫn chạy ngầm dưới
+    khay hệ thống góc phải Taskbar để giữ Watchdog 24/7, tốn ~0% CPU).
+  + Bấm vào icon MOD X ở khay hệ thống để mở lại bảng quản lý bất cứ lúc nào.
+  + Muốn TẮT HẲN TOOL + ĐÓNG HẾT GAME: bấm nút [Thoát Hoàn Toàn] ở góc dưới
+    bên trái màn hình QLTK.
+
+
+2. CÁC NÚT CHÍNH TRÊN GIAO DIỆN QLTK
+--------------------------------------------------------------------------------
+- Thanh KPI trên cùng:
+  + Tab Đang Chạy    : Số tab đang mở / giới hạn MaxTabs (vd 3 / 5).
+  + Full Rương (Xong): Số acc đã hoàn thành (khi bật xoay vòng full rương).
+  + Tổng Món SKH     : Tổng tất cả đồ Set Kích Hoạt đang có trên cả dàn acc.
+  + Bộ Đủ 5/5        : Số bộ SKH đã gom đủ 5 món (Áo - Quần - Găng - Giày - Rada).
+  + Proxy Live       : Số proxy đang sống / tổng proxy đã nhập.
+  + Cảnh Báo / Lỗi   : Số acc sai mật khẩu, bị khóa, proxy die hoặc quá giới hạn lỗi.
+
+- 3 nút tiện ích góc trên phải:
+  + [Che TK]      : Che sạch tên acc, tên NV, proxy, đường dẫn, token Telegram và
+                    tiêu đề cửa sổ game (dùng khi chụp ảnh / quay video).
+  + [Xếp Cửa Sổ]  : Tự động xếp đều tất cả cửa sổ game đang mở thành lưới.
+  + [Log]         : Mở/đóng bảng Nhật Ký Sự Kiện (nổ SKH, đổi khu, bảo trì, lỗi).
+
+- 3 nút cột trái (Sidebar):
+  + [Bật Auto Xoay Vòng] : Tự mở lần lượt các acc chưa xong cho đủ MaxTabs.
+  + [Dừng Toàn Bộ Tab]   : Tắt hết tab game đang chạy và hủy giữ 24/7.
+  + [Thoát Hoàn Toàn]    : Đóng toàn bộ tab game và thoát hẳn tool.
+
+
+3. TAB 1 — QUẢN LÝ TÀI KHOẢN
+--------------------------------------------------------------------------------
+3.1. Thêm tài khoản hàng loạt (nút "+ Thêm Acc"):
+  Dán mỗi dòng 1 tài khoản, hỗ trợ đầy đủ các định dạng:
+    taikhoan01|matkhau01
+    taikhoan02|matkhau02|103.1.2.3:8080:userprx:passprx
+    taikhoan03|matkhau03|7|1|0|Nhom-TD
+    taikhoan04|matkhau04|7|15|0|Nhom-XD|socks5://user:pass@103.1.2.3:1080
+
+  Thứ tự đủ 7 cột:
+    user | pass | số_server | map_id | khu | nhóm | proxy
+
+  - Có thể dán Proxy riêng trực tiếp cho từng acc rồi bấm [Check Proxy] để tool
+    tự dò HTTP/SOCKS5 và test nối thẳng máy chủ NRO.
+  - Mật khẩu được mã hóa AES-256-GCM cục bộ trong thư mục data/ trên máy bạn.
+
+3.2. Điều khiển từng acc & hàng loạt (tick nhiều dòng hoặc chuột phải):
+  + [Chạy]            : Mở acc theo chế độ mặc định của Farm Profile.
+  + [Treo ngầm]       : Mở chế độ Headless 0 cửa sổ (0% GPU, ~0.2% CPU, ~10-25MB RAM).
+  + [Mở có hình]      : Chuyển sang mở cửa sổ game bình thường để cầm tay.
+  + [Soi X-Quang Live]: Xem chi tiết tọa độ, nhịp ăn TN/phút, quái, chiêu đang dùng,
+                        hạn vé Map Riêng và 25 bước hoạt động gần nhất (không cần mở hình).
+  + [Dừng] / [Mở lại] : Đóng hoặc khởi động lại tab.
+  + [Gán hàng loạt]   : Đổi nhanh Nhóm / Profile / Map / Proxy cho nhiều acc cùng lúc.
+  + [Đổi khu vắng] / [Ép cất đồ] / [Ép bán rác] : Ra lệnh nóng trực tiếp qua Socket.
+  + [Tạm dừng auto] / [Tiếp tục auto]           : Dừng/chạy lại auto mà không tắt game.
+  + [Ẩn/Hiện quái] / [Ẩn/Hiện NV & PK] / [Túi Dọc/Ngang] / [Đánh xóa anim] / [Màn đen VPS]
+  + [Reset Done]      : Bỏ cờ Xong để acc chạy lại.
+
+  * Mẹo: Bấm thẳng vào cột "Đồ SKH · Sao" của 1 acc để mở bảng ma trận 0-0-0-0-0
+    và xem chi tiết từng món đang nằm ở Hành trang hay Rương nhà!
+
+
+4. TAB 2 — FARM PROFILES (ĐỒNG BỘ LIVE QUA SOCKET)
+--------------------------------------------------------------------------------
+- Mỗi Profile là 1 bộ luật farm riêng. Sửa xong bấm [Lưu & Đồng Bộ Live] là toàn
+  bộ tab đang chạy Profile đó (kể cả tab Treo ngầm) TỰ CẬP NHẬT NGAY, không cần
+  tắt game mở lại!
+
+- 5 Profile mẫu có sẵn:
+  1) TDLT — Up SKH Chuẩn          : Sư phụ TDLT + Cỏ 4 lá, cất mọi SKH & đồ >= 3 sao.
+  2) Sư Phụ Đánh Thường (Free)    : Không tốn ngọc mua TDLT/Cỏ, tự đánh nhặt SKH.
+  3) Up Đệ Tử Săn SKH             : Bảo vệ đệ, sửa đệ lười, hỗ trợ Wiggle chống đứng im.
+  4) Map Riêng (Vé 1823/1825)     : Tự mua vé khi còn mầm, dùng vé 1825 vào map riêng
+                                    ngay từ bất cứ map nào (không chạy thừa về khu cũ).
+  5) VPS 1-1 / 1-2 Siêu Nhẹ       : Bật sẵn Treo ngầm Headless, FPS 10, ẩn quái & NV.
+
+- CHỌN CHIÊU ĐÁNH QUÁI (TÀN SÁT) — trong khung "Tối Ưu Hiệu Năng & Chiến Đấu":
+  1) Chỉ Đấm cơ bản (MẶC ĐỊNH) : Chỉ dùng Đấm Dragon / Demon / Galick. Khóa cứng
+                                 KHÔNG xài Chưởng -> tiết kiệm tối đa KI & đậu!
+  2) Đấm + Kaioken / Liên Hoàn : Bỏ hoàn toàn Chưởng.
+  3) Tự động (Đấm + Chưởng)    : Xen kẽ mọi chiêu để ép tốc độ đánh nhanh nhất.
+  4) Tự chọn theo Ô phím 1 - 5 : Tick đúng ô phím trên thanh kỹ năng (Ô 1 -> Ô 5).
+
+- Các cài đặt quan trọng khác trong Profile:
+  + Map mặc định TĐ / NM / XD, Chiến thuật khu vắng, Watchdog 2 tầng không nhảy TN
+    (X giây đổi khu vắng -> Y giây thoát tab mở lại).
+  + Lọc giữ toàn bộ 14 bộ SKH hoặc chỉ giữ các bộ bạn tick; giữ đồ >= N sao.
+  + Khi Rương nhà đầy: Kệ đánh tiếp (hành trang ẩn) / Đánh dấu Xong xoay acc / Đứng nhà.
+  + Tự mua TDLT (521/1523/1524), Cỏ 4 lá (1635), Vé Map Riêng (1825), đổi Thỏi vàng (457)
+    khi >= 1.5 tỷ vàng, tự lấy & gia hạn Danh hiệu "Tay nhanh hơn não" (+20% May mắn,
+    10 Loa LVT 1653, HSD 7 ngày).
+  + Chốt "Giữ lại tối thiểu (Ngọc)" đảm bảo không bao giờ tiêu lố số ngọc muốn chừa.
+  + Đánh xóa anim (có TDLT đứng yên 1 chỗ đánh toàn map max tốc độ), Đóng băng quái.
+
+
+5. TAB 3 — KHO SKH & GHÉP SET 5 MÓN
+--------------------------------------------------------------------------------
+- Tự tổng hợp toàn bộ đồ SKH ở Hành trang + Rương nhà của cả dàn acc vào 14 bộ SKH:
+  + Trái Đất  : Songoku, Kirin, Thiên Xin Hăng, Kaio
+  + Namek     : Ốc Tiêu, Pikkoro Daimao, Picolo, Nail
+  + Xayda     : Kakarot, Cadic M, Cadic, Nappa
+  + Dùng chung: Gohan, Thần Hủy Diệt Champa
+- Quy ước mã 5 số [Áo - Quần - Găng - Giày - Rada]:
+  + Ví dụ: 1-0-2-1-0 = 1 Áo, 0 Quần, 2 Găng, 1 Giày, 0 Rada.
+  + Rê chuột vào từng ô để xem đúng acc nào đang giữ món đó.
+  + Đủ 5/5 món tự hiện huy hiệu bộ hoàn chỉnh.
+
+
+6. TAB 4 — PROXY MANAGER (HTTP & SOCKS5)
+--------------------------------------------------------------------------------
+- Dán mỗi dòng 1 proxy — nhận mọi định dạng:
+    ip:port
+    ip:port:user:pass
+    user:pass:ip:port
+    user:pass@ip:port
+    ip:port@user:pass
+    http://user:pass@ip:port
+    socks5://user:pass@ip:port
+  (Hỗ trợ dấu ngăn cách : | , ; hoặc khoảng trắng.)
+- Bấm [Check Live & Đo Ping (16 luồng)] để lọc nhanh và [Xóa Proxy Die] cho gọn.
+- Khi acc chọn Proxy = "Tự động phân bổ", tool tự chia đều theo MaxAccPerProxy
+  (cài ở Tab 5) và tự xoay sang Proxy Live khác khi Proxy Die.
+
+
+7. TAB 5 — VPS · LỊCH CA · BẢO TRÌ THÔNG MINH · TELEGRAM
+--------------------------------------------------------------------------------
+7.1. Đa tab & Quản lý RAM 3 chốt chống tắt oan:
+  - MaxTabs, giãn nhịp mở tab Min/Max (ms), Circuit Breaker (tối đa lỗi / 10 phút).
+  - Ngưỡng xả RAM tự động / tab (mặc định 380MB, đặt 0 để tắt):
+    (1) Vượt ngưỡng -> xả rác nhẹ (Unity GC + EmptyWorkingSet) trước.
+    (2) Chỉ restart mềm nếu vượt ngưỡng LIÊN TỤC >= 3 phút.
+    (3) Chỉ restart khi đang ở trạng thái FARM (không cắt ngang lúc cất đồ / bán rác).
+
+7.2. Lịch khung giờ chạy tự chọn (Nhiều ca):
+  - Tắt = chạy 24/7.
+  - Bật = bấm [+ Thêm ca] chia nhiều ca tùy ý, hỗ trợ ca vắt qua nửa đêm
+    (vd Ca 1: 04:30 -> 12:30, Ca 2: 16:30 -> 00:30).
+  - Ngoài giờ ca chạy: tự đóng sạch toàn bộ tab để VPS nghỉ & xả 100% RAM.
+
+7.3. Bảo trì thông minh (Luôn bật 24/7):
+  - Game báo bảo trì trước 30p / 15p / 5p: vẫn tiếp tục farm bình thường.
+  - Tới khi game báo còn <= 1 phút (hoặc gặp bảo trì đột xuất vài phút):
+    + Tự đóng sạch toàn bộ tab cho VPS nghỉ (không tính lỗi Circuit Breaker).
+    + Tự dò bắt tay chuẩn giao thức NRO (cmd -27) mỗi 60 giây.
+    + Máy chủ vừa khởi động xong & nhả khóa mã hóa -> tự bung lại toàn bộ dàn acc!
+  - Có thể bật thêm khung giờ nghỉ cố định dự phòng nếu muốn.
+
+7.4. Thông báo Telegram Real-Time:
+  - Tạo bot ở @BotFather lấy Bot Token + lấy Chat ID cá nhân/nhóm.
+  - Dán vào Tab 5 -> bấm [Gửi Tin Test] -> tick sự kiện muốn nhận (Nổ SKH, Đủ 5/5 Set,
+    Full rương, Sắp hết ngọc) -> [Lưu Cài Đặt Hệ Thống].
+
+
+8. TREO NGẦM HEADLESS & SOI X-QUANG LIVE
+--------------------------------------------------------------------------------
+- Chế độ Treo ngầm (nút hình Ma trên từng dòng acc hoặc thanh chọn nhiều):
+  + Chạy Unity -batchmode -nographics -nolog: 0 cửa sổ, 0% GPU, ~0.2% CPU, ~10-25MB RAM.
+  + Khi cần mở hình để cầm tay / giao dịch: bấm nút hình Mắt [Mở có hình]. Tool tự
+    đóng phiên ngầm sạch sẽ -> chờ 2.5s cho server xả phiên -> tự mở cửa sổ vào lại.
+- Cách kiểm tra acc đang treo ngầm có đánh thật không:
+  + Nhìn ngay badge xanh ở cột Trạng thái (vd: "⚡0s · 87/p" = ăn 87 nhịp TN/phút).
+  + Hoặc bấm nút [Soi X-Quang Live] trên dòng acc để xem trực tiếp:
+    * Map / Khu / Map Riêng / Tọa độ (x, y) / Proxy / RAM / PID
+    * Nhịp ăn TN sống, tốc độ nhịp/phút, tổng nhịp phiên
+    * Tên & máu quái đang đánh, Chiêu đang dùng (vd: Đấm Galick - Chỉ Đấm)
+    * Thời gian TDLT, Cỏ 4 lá, hạn Vé Map Riêng, Túi/Rương, Ngọc xanh/hồng
+    * 25 bước hoạt động gần nhất của riêng acc đó.
+
+
+9. PHÍM TẮT NHANH TRONG GAME (CHẾ ĐỘ CÓ HÌNH)
+--------------------------------------------------------------------------------
+  Phím B             : Bật / Tắt Màn đen VPS
+  Phím M             : Ẩn / Hiện hình ảnh quái
+  Phím N             : Ẩn / Hiện nhân vật & phụ kiện
+  Phím G             : Đổi Hành trang Dọc / Ngang (lưới 5 cột)
+  Phím K             : Bật / Tắt Đánh quái xóa anim
+  Phím P             : Tạm dừng / Tiếp tục Auto
+  Ctrl + Shift + H   : Xác thực bản gốc trong game
+  Ctrl+Alt+Shift + H : Xác thực bản gốc trên bảng QLTK
+
+
+10. MỨC VPS KHUYẾN NGHỊ & XỬ LÝ LỖI NHANH
+--------------------------------------------------------------------------------
+- Khuyến nghị khi dùng Treo Ngầm Headless:
+  + VPS 1 Core / 1 GB RAM : 4 - 6 tab Headless mượt mà.
+  + VPS 1 Core / 2 GB RAM : 8 - 12 tab Headless.
+  + VPS 2 Core / 4 GB RAM : 18 - 25 tab Headless (gắn Proxy 2-3 acc/proxy).
+
+- Xử lý nhanh vài tình huống thường gặp:
+  + Acc báo đỏ "Sai mật khẩu / Tài khoản bị khóa": Tool tự dừng auto-relog để
+    không spam đăng nhập. Sửa lại mật khẩu trong bảng rồi bấm Chạy lại.
+  + Muốn copy tool cho bạn bè / máy khác mà KHÔNG lộ acc cá nhân:
+    KHÔNG gửi thư mục data/ và xóa file trong game\Data\rms\. Tốt nhất chạy file
+    pack_release.bat để xuất ra bản ZIP sạch 100%.
+
+================================================================================
+   MOD X · H TEAM — Chúc anh em nổ Full Set Kích Hoạt 5/5!
+================================================================================

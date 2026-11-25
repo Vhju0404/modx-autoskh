@@ -1,0 +1,18 @@
+# Dữ liệu tài khoản, mật khẩu, proxy, token cá nhân — TUYỆT ĐỐI KHÔNG COMMIT
+data/
+*.vault.key
+*.key
+*.log
+
+# Thư mục client game gốc (~200MB assets) — phân phối qua GitHub Releases (pack_release.bat), không đẩy vào Git
+game/
+
+# File build, backup & đóng gói
+release/
+*.zip
+*.exe
+*.exe~
+*.syso
+Win
+client/AssemblyCSharp/bin/
+client/AssemblyCSharp/obj/
