@@ -41,7 +41,7 @@ public class PickMobController
             return;
         }
 
-        bool flag = ItemTime.isExistItem(GameEvents.ID_ICON_ITEM_TDLT);
+        bool flag = GameEvents.IsTDLTActive();
         bool flag2 = PickMob.IsTanSat && flag;
         if (PickMob.IsAutoPickItems && !flag2)
         {
@@ -166,6 +166,7 @@ public class PickMobController
                                 }
                                 else
                                 {
+                                    Attack.stopAutoAttack();
                                     GameScr.gI().doDoubleClickToObj(mobFocus);
                                 }
                             }
@@ -203,7 +204,7 @@ public class PickMobController
         }
 
         long now = mSystem.currentTimeMillis();
-        bool hasTDLT = GameScr.canAutoPlay || ItemTime.isExistItem(GameEvents.ID_ICON_ITEM_TDLT);
+        bool hasTDLT = GameEvents.IsTDLTActive();
 
         // 1. Nhặt nhanh item dưới chân không cần tele & không ngắt nhịp đánh
         if (PickMob.IsAutoPickItems)

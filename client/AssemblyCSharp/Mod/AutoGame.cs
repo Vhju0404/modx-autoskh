@@ -154,7 +154,7 @@ namespace AssemblyCSharp.Mod
         private static int manualZoneId = -1;
         private static bool hasSwitchedForNoExp = false;
 
-        // ModBuy: timeout chuyến mua 30s + cooldown 60s từng loại (không bao giờ kẹt NPC!)
+        // ModBuy: timeout chuyến mua 30s + ghi nhớ Giá/Thời hạn + khóa GemGate chống spam khi hết ngọc!
         private static string activeBuyKind = "";
         private static long buyTripStartAt = 0;
         private static long lastBuyClickAt = 0;
@@ -162,6 +162,10 @@ namespace AssemblyCSharp.Mod
         private static long lastMenuSelectAt = 0;
         private static long lastNpcTeleAt = 0;
         private static long shopPanelOpenedAt = 0;
+        private static int tripBuyClicks = 0;
+        private static int tripLastAttemptPrice = 1;
+        private static int tripWalletBeforeClick = -1;
+        private static long charmVerifiedUntilMs = 0;
         private static readonly Dictionary<string, long> BuyCooldownUntil = new Dictionary<string, long>();
 
         // ModItemShop: bán/cất duyệt ngược cuối túi + giãn nhịp 650ms + cầu chì chống kẹt 24/7
@@ -463,8 +467,11 @@ namespace AssemblyCSharp.Mod
                 return;
             }
 
-            // P8 — Farm SKH + Watchdog chống kẹt 2 tầng
-            StartCombat("Đang farm K" + TileMap.zoneID);
+            // P8 — Farm SKH + Watchdog chống kẹt 2 tầng (nếu hết TDLT mà không đủ ngọc mua -> tự đánh thường 100%, không đứng chờ!)
+            string farmNote = (prof.IsTDLTMode && !GameEvents.IsTDLTActive())
+                ? ("Đang farm K" + TileMap.zoneID + " (Đánh thường)")
+                : ("Đang farm K" + TileMap.zoneID);
+            StartCombat(farmNote);
             CheckNoExpWatchdog(allowZoneSwitch: true);
         }
 
@@ -574,8 +581,14 @@ namespace AssemblyCSharp.Mod
             if (lastTimeHitTn == 0) lastTimeHitTn = now;
 
             long idleSec = (now - lastTimeHitTn) / 1000L;
+            int switchSec = prof.NoExpSwitchSec;
+            if (allowZoneSwitch && switchSec <= 0 && prof.IsPrivateTicketMode && !IsInPrivateMap())
+            {
+                // Khi hết vé phải ra map công cộng đánh thường tạm -> tự bật chống KS 40s!
+                switchSec = 40;
+            }
 
-            if (allowZoneSwitch && prof.NoExpSwitchSec > 0 && !hasSwitchedForNoExp && idleSec >= prof.NoExpSwitchSec)
+            if (allowZoneSwitch && switchSec > 0 && !hasSwitchedForNoExp && idleSec >= switchSec)
             {
                 hasSwitchedForNoExp = true;
                 AskZoneListAndSwitch(now, true, idleSec + "s không nhảy TN -> đổi khu vắng");
@@ -797,12 +810,114 @@ namespace AssemblyCSharp.Mod
             AbortBuyTripCooldown(kind, now, 60000L, reason);
         }
 
+        public static void OnProfileApplied(FarmProfile prof)
+        {
+            charmVerifiedUntilMs = 0;
+            if (prof == null || !prof.AutoBuyCharm || prof.CharmIDs == null || prof.CharmIDs.Count == 0)
+            {
+                isBuyCharm = false;
+            }
+        }
+
+        /// <summary>
+        /// Bắt tức thì (0.1s) thông báo thiếu ngọc / thiếu vàng từ Server khi đang mở Shop ->
+        /// tự học loại ví (Ngọc Xanh riêng hay Xanh+Hồng), khóa GemGate tới khi ngọc tăng đủ, đóng Shop về bãi up thường ngay!
+        /// </summary>
+        public static bool OnServerShopMessage(string raw)
+        {
+            if (string.IsNullOrEmpty(raw) || string.IsNullOrEmpty(activeBuyKind)) return false;
+            string low = raw.ToLower();
+            long now = mSystem.currentTimeMillis();
+
+            if (activeBuyKind == "goldbar" &&
+                (low.Contains("không đủ vàng") || low.Contains("khong du vang") || low.Contains("thiếu vàng") || low.Contains("thieu vang")))
+            {
+                GameCanvas.endDlg();
+                AbortBuyTripCooldown("goldbar", now, 300000L, "Thiếu vàng đổi Thỏi -> về bãi up tiếp");
+                return true;
+            }
+
+            bool isGemShortage =
+                low.Contains("không đủ ngọc") || low.Contains("khong du ngoc") ||
+                low.Contains("thiếu ngọc") || low.Contains("thieu ngoc") ||
+                low.Contains("còn thiếu") || low.Contains("con thieu") ||
+                low.Contains("không đủ hồng ngọc") || low.Contains("khong du hong ngoc") ||
+                low.Contains("không đủ ruby") || low.Contains("khong du ruby") ||
+                low.Contains("không đủ vật phẩm") || low.Contains("khong du vat pham");
+            if (!isGemShortage) return false;
+
+            string kind = activeBuyKind;
+            int price = System.Math.Max(1, tripLastAttemptPrice);
+            bool isPinkOnly = low.Contains("hồng ngọc") || low.Contains("hong ngoc") || low.Contains("ruby");
+            bool isGreenOnly = low.Contains("ngọc xanh") || low.Contains("ngoc xanh");
+
+            var c = global::Char.myCharz();
+            int keep = System.Math.Max(0, GameEvents.Profile.MinGemKeep);
+            if (!isPinkOnly && !isGreenOnly && c != null)
+            {
+                // Nếu tổng Xanh + Hồng đủ tiền nhưng Ngọc Xanh riêng lại thiếu -> món này CHỈ nhận Ngọc Xanh!
+                if ((c.luong + c.luongKhoa - keep) >= price && (c.luong - keep) < price)
+                {
+                    isGreenOnly = true;
+                }
+            }
+
+            GameEvents.LockKindInsufficientGem(kind, price, isGreenOnly, isPinkOnly);
+            GameCanvas.endDlg();
+            NotifyLowGemOnce("Thiếu ngọc mua " + kind + " (cần " + price + ", hiện có " + GameEvents.GetWalletSummaryText() + ") -> tự nhớ giá & về bãi up thường");
+            AbortBuyTripCooldown(kind, now, 60000L, "Thiếu ngọc mua " + kind + " -> về bãi up thường");
+            return true;
+        }
+
+        private static bool IsStuckClickingWithoutEffect(string kind, long now, int expectedPrice)
+        {
+            if (tripBuyClicks < 3) return false;
+            var c = global::Char.myCharz();
+            int curTotal = c != null ? (c.luong + c.luongKhoa) : 0;
+            if (tripWalletBeforeClick >= 0 && curTotal < tripWalletBeforeClick)
+            {
+                // Có trừ ngọc thật -> reset bộ đếm click để mua tiếp (vd mua Loa nhiều cái)
+                tripBuyClicks = 0;
+                tripWalletBeforeClick = curTotal;
+                return false;
+            }
+            // Bấm 3 phát liên tiếp mà ngọc không nhúc nhích -> khóa GemGate dừng ngay, tuyệt đối không đứng spam 30s!
+            bool greenSuspect = false;
+            int keep = System.Math.Max(0, GameEvents.Profile.MinGemKeep);
+            if (c != null && (c.luong + c.luongKhoa - keep) >= expectedPrice && (c.luong - keep) < expectedPrice)
+            {
+                greenSuspect = true;
+            }
+            GameEvents.LockKindInsufficientGem(kind, expectedPrice, greenSuspect, false);
+            NotifyLowGemOnce("Không mua được " + kind + " sau 3 lần thử (" + GameEvents.GetWalletSummaryText() + ") -> tạm khóa chờ thêm ngọc & về bãi up");
+            AbortBuyTripCooldown(kind, now, 120000L, "Dừng mua " + kind + " -> về bãi up thường");
+            return true;
+        }
+
+        private static void RecordBuyClick(int unitOrTotalPrice)
+        {
+            var c = global::Char.myCharz();
+            int curTotal = c != null ? (c.luong + c.luongKhoa) : 0;
+            if (tripBuyClicks == 0 || (tripWalletBeforeClick >= 0 && curTotal < tripWalletBeforeClick))
+            {
+                tripWalletBeforeClick = curTotal;
+                tripBuyClicks = 1;
+            }
+            else
+            {
+                tripBuyClicks++;
+            }
+            tripLastAttemptPrice = System.Math.Max(1, unitOrTotalPrice);
+        }
+
         private static void AbortBuyTripCooldown(string kind, long now, long cooldownMs, string reason)
         {
             BuyCooldownUntil[kind] = now + cooldownMs;
             activeBuyKind = "";
             buyTripStartAt = 0;
             shopPanelOpenedAt = 0;
+            tripBuyClicks = 0;
+            tripWalletBeforeClick = -1;
             isBuyTDLT = false;
             isBuyLucky = false;
             isBuyTicket = false;
@@ -820,6 +935,7 @@ namespace AssemblyCSharp.Mod
         private static void EvaluateAutoBuyTriggers(long now)
         {
             var prof = GameEvents.Profile;
+            int spendable, needGem;
 
             // 0. Nếu đã có Danh hiệu Tay nhanh hơn não (1673) trong hành trang mà chưa đeo -> tự đeo luôn!
             if (prof.AutoGetTitle && GameEvents.HasItemInBag(GameEvents.ID_ITEM_TITLE_FAST_HAND) &&
@@ -835,42 +951,78 @@ namespace AssemblyCSharp.Mod
                 isBuyGoldBar = true;
             }
 
-            // 2. Tự mua Vé riêng tư [1825]: CHỈ mua khi KHÔNG còn vé trong hành trang & đã ra ngoài map riêng (không check thời gian còn lại!)
+            // 2. Tự mua Vé riêng tư [1825]: đối chiếu giá đã nhớ + ví Ngọc Xanh/Hồng; thiếu ngọc -> ở ngoài đánh thường 100%!
             if (prof.IsPrivateTicketMode && prof.AutoBuyPrivateTicket && GameEvents.IsConMam() &&
                 !IsInPrivateMap() && !GameEvents.HasPrivateTicketInBag() && !IsBuyOnCooldown("ticket", now))
             {
-                if (GameEvents.HasEnoughGem(1)) isBuyTicket = true;
-                else NotifyLowGemOnce("Không đủ ngọc mua Vé riêng tư");
+                // Lần đầu chưa biết giá vé cần tối thiểu 15 ngọc mới qua Santa ngó 1 lần; sau đó nhớ cứng giá thật (vd 1999 ngọc)
+                int fallbackTicket = GameEvents.HasLearnedKindPrice("ticket") ? 1999 : 15;
+                if (GameEvents.CanAffordKind("ticket", fallbackTicket, out spendable, out needGem))
+                {
+                    isBuyTicket = true;
+                }
+                else
+                {
+                    NotifyLowGemOnce("Chưa đủ ngọc mua Vé riêng tư (cần " + needGem + ", khả dụng " + spendable + ") -> tiếp tục up thường");
+                }
             }
 
-            // 3. Tự mua TDLT
-            if (prof.IsTDLTMode && prof.AutoBuyTDLT && !ItemTime.isExistItem(GameEvents.ID_ICON_ITEM_TDLT) &&
+            // 3. Tự mua TDLT: nếu hết TDLT mà không đủ ngọc -> KHÔNG chờ, để FSM rơi thẳng xuống đánh quái thường!
+            if (prof.IsTDLTMode && prof.AutoBuyTDLT && !GameEvents.IsTDLTActive() &&
                 GameEvents.GetTimeTDLT() <= 0 && !IsBuyOnCooldown("tdlt", now))
             {
                 int price = GameEvents.GetTDLTGemPrice(prof.TDLTItemID);
-                if (GameEvents.HasEnoughGem(price)) isBuyTDLT = true;
-                else NotifyLowGemOnce("Không đủ ngọc mua TDLT (cần " + price + " + giữ " + prof.MinGemKeep + ")");
+                if (GameEvents.CanAffordKind("tdlt", price, out spendable, out needGem))
+                {
+                    isBuyTDLT = true;
+                }
+                else
+                {
+                    NotifyLowGemOnce("Chưa đủ ngọc mua TDLT (cần " + needGem + ", khả dụng " + spendable + ") -> tự đánh thường không chờ TDLT");
+                }
             }
 
             // 4. Tự mua Cỏ 4 lá (1635)
             if (prof.AutoBuyLuckyGrass && !ItemTime.isExistItem(GameEvents.ID_ICON_ITEM_COBONLA) &&
                 GameEvents.GetItemQty(1635) <= 0 && !IsBuyOnCooldown("lucky", now))
             {
-                if (GameEvents.HasEnoughGem(10)) isBuyLucky = true;
-                else NotifyLowGemOnce("Không đủ ngọc mua Cỏ 4 lá");
+                int cloverPrice = GameEvents.GetItemShopGemPrice(1635, 10);
+                if (GameEvents.CanAffordKind("lucky", cloverPrice, out spendable, out needGem))
+                {
+                    isBuyLucky = true;
+                }
+                else
+                {
+                    NotifyLowGemOnce("Chưa đủ ngọc mua Cỏ 4 lá (cần " + needGem + ", khả dụng " + spendable + ") -> tiếp tục up thường");
+                }
             }
 
-            // 5. Tự nhận & gia hạn Danh hiệu "Tay nhanh hơn não" (1673 — +20% May mắn, HSD 7 ngày)
+            // 5. Tự nhận & gia hạn Danh hiệu "Tay nhanh hơn não" (1673 — nhớ chuẩn số Loa còn thiếu * 15 + 2 ngọc)
             if (prof.AutoGetTitle && !GameEvents.IsFastHandTitleActive(now) &&
                 !GameEvents.HasItemInBag(GameEvents.ID_ITEM_TITLE_FAST_HAND) && !IsBuyOnCooldown("title", now))
             {
-                if (GameEvents.HasEnoughGem(2))
+                if (GameEvents.CanAffordKind("title", 2, out spendable, out needGem))
                 {
                     isGetTitle = true;
                 }
                 else
                 {
-                    NotifyLowGemOnce("Không đủ ngọc đi kiểm tra/nhận danh hiệu Tay nhanh hơn não");
+                    NotifyLowGemOnce("Chưa đủ ngọc lấy danh hiệu Tay nhanh (cần " + needGem + ", khả dụng " + spendable + ") -> tiếp tục up thường");
+                }
+            }
+
+            // 6. Tự mua & gia hạn Bùa Hạt Mít (nhớ thời hạn còn lại + kiểm tra ngọc trước khi đi)
+            if (prof.AutoBuyCharm && prof.CharmIDs != null && prof.CharmIDs.Count > 0 &&
+                now >= charmVerifiedUntilMs && !IsBuyOnCooldown("charm", now))
+            {
+                int defCharmGem = prof.CharmDuration == "1m" ? 20 : (prof.CharmDuration == "8h" ? 8 : 2);
+                if (GameEvents.CanAffordKind("charm", defCharmGem, out spendable, out needGem))
+                {
+                    isBuyCharm = true;
+                }
+                else
+                {
+                    NotifyLowGemOnce("Chưa đủ ngọc mua Bùa Hạt Mít (cần " + needGem + ", khả dụng " + spendable + ") -> tiếp tục up thường");
                 }
             }
         }
@@ -896,6 +1048,8 @@ namespace AssemblyCSharp.Mod
             {
                 activeBuyKind = kind;
                 buyTripStartAt = now;
+                tripBuyClicks = 0;
+                tripWalletBeforeClick = -1;
                 if (kind == "title")
                 {
                     titlePhase = 0;
@@ -969,6 +1123,7 @@ namespace AssemblyCSharp.Mod
                 }
                 if (GameCanvas.panel.isShow && global::Char.myCharz().arrItemShop != null)
                 {
+                    GameEvents.LearnPricesFromOpenShop();
                     GameEvents.InspectOwnedTitleInShop(GameEvents.ID_ITEM_TITLE_FAST_HAND, now);
                     bool inOwned;
                     int pct = GameEvents.FindTitleShopProgress(GameEvents.ID_ITEM_TITLE_FAST_HAND, out inOwned);
@@ -978,8 +1133,10 @@ namespace AssemblyCSharp.Mod
                         CloseNpcUi();
                         return;
                     }
+                    int titleCost = GameEvents.GetItemShopGemPrice(GameEvents.ID_ITEM_TITLE_FAST_HAND, 2);
                     if (inOwned || pct >= 100)
                     {
+                        GameEvents.SetRememberedKindPrice("title", titleCost);
                         titlePhase = 3;
                         titleBuyAttempts = 0;
                         return;
@@ -993,19 +1150,24 @@ namespace AssemblyCSharp.Mod
 
                     if (needBuy <= 0)
                     {
+                        GameEvents.SetRememberedKindPrice("title", titleCost);
                         titlePhase = 2;
                         SetState("BUFF", "Đủ " + haveLoa + " Loa -> chat lấy DH");
                     }
                     else
                     {
-                        int cost = needBuy * 15 + 2;
-                        if (!GameEvents.HasEnoughGem(cost))
+                        int loaUnit = GameEvents.GetItemShopGemPrice(GameEvents.ID_ITEM_LOA_LVT, 15);
+                        int cost = needBuy * loaUnit + titleCost;
+                        GameEvents.SetRememberedKindPrice("title", cost);
+                        if (!GameEvents.HasEnoughGemForKind("title", cost))
                         {
-                            NotifyLowGemOnce("Cần " + cost + " ngọc (mua " + needBuy + " Loa LVT + 2 ngọc danh hiệu)");
-                            AbortBuyTripCooldown("title", now, 600000L, "Thiếu " + cost + " ngọc lấy DH -> farm");
+                            GameEvents.LockKindInsufficientGem("title", cost, false, false);
+                            NotifyLowGemOnce("Cần " + cost + " ngọc (mua " + needBuy + " Loa LVT + " + titleCost + " ngọc DH, hiện có " + GameEvents.GetWalletSummaryText() + ") -> tự nhớ giá & về bãi up");
+                            AbortBuyTripCooldown("title", now, 600000L, "Thiếu " + cost + " ngọc lấy DH -> về bãi up");
                             return;
                         }
                         titlePhase = 1;
+                        tripBuyClicks = 0;
                         SetState("BUFF", "Mua " + needBuy + " Loa LVT [1653]");
                     }
                     return;
@@ -1028,19 +1190,28 @@ namespace AssemblyCSharp.Mod
                 }
                 if (GameCanvas.panel.isShow)
                 {
-                    if (!GameEvents.HasEnoughGem(15))
+                    GameEvents.LearnPricesFromOpenShop();
+                    int loaUnit = GameEvents.GetItemShopGemPrice(GameEvents.ID_ITEM_LOA_LVT, 15);
+                    int remNeed = System.Math.Max(1, titleNeedLoa - haveLoa);
+                    int remTotalCost = remNeed * loaUnit + GameEvents.GetItemShopGemPrice(GameEvents.ID_ITEM_TITLE_FAST_HAND, 2);
+                    GameEvents.SetRememberedKindPrice("title", remTotalCost);
+
+                    if (!GameEvents.HasEnoughGemForKind("title", loaUnit))
                     {
-                        NotifyLowGemOnce("Không đủ 15 ngọc mua tiếp Loa to liên vũ trụ (1653)");
-                        AbortBuyTripCooldown("title", now, 600000L, "Thiếu ngọc mua Loa -> farm");
+                        GameEvents.LockKindInsufficientGem("title", remTotalCost, false, false);
+                        NotifyLowGemOnce("Không đủ " + loaUnit + " ngọc mua tiếp Loa LVT (" + GameEvents.GetWalletSummaryText() + ") -> về bãi up");
+                        AbortBuyTripCooldown("title", now, 600000L, "Thiếu ngọc mua Loa -> về bãi up");
                         return;
                     }
+                    if (IsStuckClickingWithoutEffect("title", now, loaUnit)) return;
                     if (now - lastBuyClickAt > 1050L)
                     {
                         lastBuyClickAt = now;
+                        RecordBuyClick(loaUnit);
                         pendingClientInput = "1";
                         pendingClientInputReadyAt = now + 350L;
                         SetState("BUFF", "Mua Loa [1653] (" + haveLoa + "/" + titleNeedLoa + ")");
-                        Service.gI().buyItem(1, GameEvents.ID_ITEM_LOA_LVT, 0);
+                        GameEvents.SendShopBuyPacket(GameEvents.ID_ITEM_LOA_LVT, 1);
                     }
                     return;
                 }
@@ -1083,7 +1254,10 @@ namespace AssemblyCSharp.Mod
                 if (GameCanvas.panel.isShow && global::Char.myCharz().arrItemShop != null)
                 {
                     var c = global::Char.myCharz();
+                    GameEvents.LearnPricesFromOpenShop();
                     GameEvents.InspectOwnedTitleInShop(GameEvents.ID_ITEM_TITLE_FAST_HAND, now);
+                    int titleCost = GameEvents.GetItemShopGemPrice(GameEvents.ID_ITEM_TITLE_FAST_HAND, 2);
+                    GameEvents.SetRememberedKindPrice("title", titleCost);
                     if (c.arrItemShop.Length > 1 && GameCanvas.panel.currentTabIndex != 1)
                     {
                         GameCanvas.panel.currentTabIndex = 1;
@@ -1110,20 +1284,22 @@ namespace AssemblyCSharp.Mod
                         }
                     }
 
-                    if (!GameEvents.HasEnoughGem(2))
+                    if (!GameEvents.HasEnoughGemForKind("title", titleCost))
                     {
-                        NotifyLowGemOnce("Không đủ 2 ngọc mua danh hiệu Tay nhanh hơn não");
-                        AbortBuyTripCooldown("title", now, 600000L, "Thiếu 2 ngọc DH -> đi farm");
+                        GameEvents.LockKindInsufficientGem("title", titleCost, false, false);
+                        NotifyLowGemOnce("Không đủ " + titleCost + " ngọc mua danh hiệu Tay nhanh hơn não");
+                        AbortBuyTripCooldown("title", now, 600000L, "Thiếu " + titleCost + " ngọc DH -> về bãi up");
                         return;
                     }
 
                     titleGemBeforeBuy = c.luong + c.luongKhoa;
                     titleBuyAttempts++;
                     lastBuyClickAt = now;
+                    RecordBuyClick(titleCost);
                     pendingClientInput = "1";
                     pendingClientInputReadyAt = now + 350L;
                     SetState("BUFF", "Kích hoạt danh hiệu [1673]");
-                    Service.gI().buyItem(1, GameEvents.ID_ITEM_TITLE_FAST_HAND, 0);
+                    GameEvents.SendShopBuyPacket(GameEvents.ID_ITEM_TITLE_FAST_HAND, 1);
                     return;
                 }
                 SetState("BUFF", "Mở mục Danh hiệu Santa");
@@ -1171,10 +1347,16 @@ namespace AssemblyCSharp.Mod
         private static void RunBuyTDLT(long now)
         {
             var prof = GameEvents.Profile;
-            int price = GameEvents.GetTDLTGemPrice(prof.TDLTItemID);
-            if (GameEvents.GetTimeTDLT() >= prof.TDLTMinMinutes || !GameEvents.HasEnoughGem(price))
+            if (GameEvents.GetTimeTDLT() >= prof.TDLTMinMinutes || GameEvents.IsTDLTActive())
             {
                 AbortBuyTrip("tdlt", now, "Xong chuyến mua TDLT");
+                return;
+            }
+            int price = GameEvents.GetTDLTGemPrice(prof.TDLTItemID);
+            if (!GameEvents.HasEnoughGemForKind("tdlt", price))
+            {
+                GameEvents.LockKindInsufficientGem("tdlt", price, false, false);
+                AbortBuyTrip("tdlt", now, "Thiếu ngọc mua TDLT -> về đánh thường");
                 return;
             }
             if (!GoToMap5ShopNpc(now, "Qua Đảo Kame mua TDLT", out int npcId)) return;
@@ -1192,13 +1374,24 @@ namespace AssemblyCSharp.Mod
                     if (now - buyTripStartAt > 18000L) AbortBuyTrip("tdlt", now, "Không thấy TDLT (" + prof.TDLTItemID + ") trong shop");
                     return;
                 }
+                int realPrice = GameEvents.GetTDLTGemPrice(prof.TDLTItemID);
+                GameEvents.SetRememberedKindPrice("tdlt", realPrice);
+                if (!GameEvents.HasEnoughGemForKind("tdlt", realPrice))
+                {
+                    GameEvents.LockKindInsufficientGem("tdlt", realPrice, false, false);
+                    NotifyLowGemOnce("Không đủ " + realPrice + " ngọc mua TDLT (" + GameEvents.GetWalletSummaryText() + ") -> về bãi đánh thường");
+                    AbortBuyTrip("tdlt", now, "Thiếu " + realPrice + " ngọc TDLT -> đánh thường");
+                    return;
+                }
+                if (IsStuckClickingWithoutEffect("tdlt", now, realPrice)) return;
                 if (now - lastBuyClickAt > 1200L)
                 {
                     lastBuyClickAt = now;
+                    RecordBuyClick(realPrice);
                     pendingClientInput = "1";
                     pendingClientInputReadyAt = now + 300L;
                     SetState("BUFF", "Mua TDLT (ID " + prof.TDLTItemID + ")");
-                    Service.gI().buyItem(1, prof.TDLTItemID, 0);
+                    GameEvents.SendShopBuyPacket(prof.TDLTItemID, 1);
                 }
                 return;
             }
@@ -1214,9 +1407,16 @@ namespace AssemblyCSharp.Mod
             int curQty = GameEvents.GetItemQty(1635);
             int effectiveQty = curQty + (ItemTime.isExistItem(GameEvents.ID_ICON_ITEM_COBONLA) ? 1 : 0);
             // Tính cả Cỏ 4 lá vừa ăn bật buff (effectiveQty) để không bao giờ mua đúp!
-            if (effectiveQty >= qty || !GameEvents.HasEnoughGem(10))
+            if (effectiveQty >= qty)
             {
                 AbortBuyTrip("lucky", now, "Xong chuyến mua Cỏ 4 lá");
+                return;
+            }
+            int unitCost = GameEvents.GetItemShopGemPrice(1635, 10);
+            if (!GameEvents.HasEnoughGemForKind("lucky", unitCost))
+            {
+                GameEvents.LockKindInsufficientGem("lucky", unitCost, false, false);
+                AbortBuyTrip("lucky", now, "Thiếu ngọc mua Cỏ 4 lá -> về bãi up");
                 return;
             }
             if (!GoToMap5ShopNpc(now, "Qua Đảo Kame mua Cỏ 4 lá", out int npcId)) return;
@@ -1235,16 +1435,27 @@ namespace AssemblyCSharp.Mod
                     if (now - buyTripStartAt > 18000L) AbortBuyTrip("lucky", now, "Không thấy Cỏ 4 lá (1635) trong shop Santa");
                     return;
                 }
+                int realCost = GameEvents.GetItemShopGemPrice(1635, 10);
+                GameEvents.SetRememberedKindPrice("lucky", realCost);
+                if (!GameEvents.HasEnoughGemForKind("lucky", realCost))
+                {
+                    GameEvents.LockKindInsufficientGem("lucky", realCost, false, false);
+                    NotifyLowGemOnce("Không đủ " + realCost + " ngọc mua Cỏ 4 lá (" + GameEvents.GetWalletSummaryText() + ") -> về bãi up");
+                    AbortBuyTrip("lucky", now, "Thiếu " + realCost + " ngọc Cỏ 4 lá -> về up");
+                    return;
+                }
+                if (IsStuckClickingWithoutEffect("lucky", now, realCost)) return;
                 if (now - lastBuyClickAt > 1400L)
                 {
                     int need = System.Math.Max(1, qty - curQty);
-                    int affordable = System.Math.Max(1, GameEvents.MaxAffordableQty(10));
+                    int affordable = System.Math.Max(1, GameEvents.MaxAffordableQtyForKind("lucky", realCost));
                     int buyNow = System.Math.Min(need, affordable);
                     lastBuyClickAt = now;
+                    RecordBuyClick(realCost * buyNow);
                     pendingClientInput = buyNow.ToString();
                     pendingClientInputReadyAt = now + 300L;
                     SetState("BUFF", "Mua Cỏ 4 lá x" + buyNow);
-                    Service.gI().buyItem(1, 1635, 0);
+                    GameEvents.SendShopBuyPacket(1635, 1);
                 }
                 return;
             }
@@ -1280,19 +1491,24 @@ namespace AssemblyCSharp.Mod
                     }
                     return;
                 }
-                if (price > 0 && !GameEvents.HasEnoughGem(price))
+                int reqPrice = price > 0 ? price : 1;
+                GameEvents.SetRememberedKindPrice("ticket", reqPrice);
+                if (!GameEvents.HasEnoughGemForKind("ticket", reqPrice))
                 {
-                    NotifyLowGemOnce("Không đủ " + price + " ngọc mua Vé riêng tư [" + ticketShopId + "]");
-                    AbortBuyTripCooldown("ticket", now, 300000L, "Thiếu " + price + " ngọc mua Vé riêng tư");
+                    GameEvents.LockKindInsufficientGem("ticket", reqPrice, false, false);
+                    NotifyLowGemOnce("Không đủ " + reqPrice + " ngọc mua Vé riêng tư [" + ticketShopId + "] (" + GameEvents.GetWalletSummaryText() + ") -> tự nhớ giá & về map thường up");
+                    AbortBuyTripCooldown("ticket", now, 300000L, "Thiếu " + reqPrice + " ngọc Vé -> về up thường");
                     return;
                 }
+                if (IsStuckClickingWithoutEffect("ticket", now, reqPrice)) return;
                 if (now - lastBuyClickAt > 1200L)
                 {
                     lastBuyClickAt = now;
+                    RecordBuyClick(reqPrice);
                     pendingClientInput = "1";
                     pendingClientInputReadyAt = now + 350L;
                     SetState("BUFF", "Mua Vé riêng tư [" + ticketShopId + "]");
-                    Service.gI().buyItem(1, ticketShopId, 0);
+                    GameEvents.SendShopBuyPacket(ticketShopId, 1);
                 }
                 return;
             }
@@ -1371,19 +1587,33 @@ namespace AssemblyCSharp.Mod
             }
             if (GameCanvas.panel.isShow)
             {
-                int charmId = GameEvents.GetNextCharmToBuy();
+                int charmPrice, minRemainMin;
+                int charmId = GameEvents.GetNextCharmToBuy(out charmPrice, out minRemainMin);
                 if (charmId == -1)
                 {
+                    // Ghi nhớ chính xác thời gian hiệu lực còn lại của bùa để hết hạn mới quay lại mua tiếp!
+                    charmVerifiedUntilMs = now + (long)System.Math.Max(5, minRemainMin - 1) * 60000L;
                     AbortBuyTrip("charm", now, "Đã mua đủ Bùa Hạt Mít");
                     return;
                 }
+                int reqGem = charmPrice > 0 ? charmPrice : 1;
+                GameEvents.SetRememberedKindPrice("charm", reqGem);
+                if (!GameEvents.HasEnoughGemForKind("charm", reqGem))
+                {
+                    GameEvents.LockKindInsufficientGem("charm", reqGem, false, false);
+                    NotifyLowGemOnce("Không đủ " + reqGem + " ngọc mua Bùa Hạt Mít (" + GameEvents.GetWalletSummaryText() + ") -> tự nhớ giá & về bãi up");
+                    AbortBuyTrip("charm", now, "Thiếu " + reqGem + " ngọc Bùa -> về bãi up");
+                    return;
+                }
+                if (IsStuckClickingWithoutEffect("charm", now, reqGem)) return;
                 if (now - lastBuyClickAt > 1200L)
                 {
                     lastBuyClickAt = now;
+                    RecordBuyClick(reqGem);
                     pendingClientInput = "1";
                     pendingClientInputReadyAt = now + 300L;
                     SetState("BUFF", "Mua Bùa ID=" + charmId);
-                    Service.gI().buyItem(1, charmId, 0);
+                    GameEvents.SendShopBuyPacket(charmId, 1);
                 }
                 return;
             }

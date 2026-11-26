@@ -122,10 +122,8 @@ namespace AssemblyCSharp.Mod
             {
                 Attack.stopAutoAttack();
             }
-            if (prof.AutoBuyCharm && prof.CharmIDs != null && prof.CharmIDs.Count > 0)
-            {
-                AutoGame.isBuyCharm = true;
-            }
+            ClearGemGatesOnConfigChange();
+            AutoGame.OnProfileApplied(prof);
         }
 
         public static bool onSetResolution()
@@ -243,7 +241,11 @@ namespace AssemblyCSharp.Mod
 
             bool inGame = GameCanvas.currentScreen == GameScr.instance &&
                 global::Char.myCharz() != null && !string.IsNullOrEmpty(global::Char.myCharz().cName);
-            if (inGame) return;
+            if (inGame)
+            {
+                AutoGame.OnServerShopMessage(info);
+                return;
+            }
 
             long now = mSystem.currentTimeMillis();
             long delay = System.Math.Min(20000L, 5000L + _reloginAttempts * 2500L);
@@ -567,6 +569,7 @@ namespace AssemblyCSharp.Mod
             if (string.IsNullOrEmpty(text)) return;
 
             CheckServerMaintenanceText(text, false);
+            AutoGame.OnServerShopMessage(text);
 
             // Bắt thời hạn tìm set kích hoạt từ thông báo server
             string low = text.ToLower();
@@ -833,6 +836,7 @@ namespace AssemblyCSharp.Mod
 
         public static int FindPrivateTicketInShop(out int gemPrice)
         {
+            LearnPricesFromOpenShop();
             gemPrice = 0;
             var shops = global::Char.myCharz()?.arrItemShop;
             if (shops == null) return -1;
@@ -845,20 +849,23 @@ namespace AssemblyCSharp.Mod
                 {
                     Item it = shops[tab][i];
                     if (it == null || it.template == null) continue;
+                    int itemCost = ExtractShopItemGemCost(it);
                     if (it.template.id == 1825 ||
                         (!string.IsNullOrEmpty(it.template.name) && it.template.name.ToLower().Contains("vé riêng tư")))
                     {
-                        gemPrice = it.buyGold > 0 ? it.buyGold : 0;
+                        gemPrice = itemCost > 0 ? itemCost : 0;
+                        if (gemPrice > 0) SetRememberedKindPrice("ticket", gemPrice);
                         return it.template.id;
                     }
                     if (it.template.id == 1823 && fallbackId < 0)
                     {
                         fallbackId = 1823;
-                        fallbackPrice = it.buyGold > 0 ? it.buyGold : 1999;
+                        fallbackPrice = itemCost > 0 ? itemCost : 1999;
                     }
                 }
             }
             gemPrice = fallbackPrice;
+            if (gemPrice > 0) SetRememberedKindPrice("ticket", gemPrice);
             return fallbackId;
         }
 
@@ -1126,8 +1133,16 @@ namespace AssemblyCSharp.Mod
 
                         if (AutoGame.isAuto && !AutoGame.isPaused)
                         {
-                            // Tự bật TDLT có sẵn trong hành trang (có giãn nhịp 2.5s tránh spam gói); KHÔNG bao giờ tự tắt TDLT của người chơi!
-                            if (Profile.IsTDLTMode && !GameScr.canAutoPlay && !ItemTime.isExistItem(ID_ICON_ITEM_TDLT) && GetTimeTDLT() > 0 && now - _lastUseTdltAt >= 2500L)
+                            // Nếu icon TDLT (4387) đã hết hạn biến mất -> hạ ngay cờ canAutoPlay bị kẹt để nhân vật tự dịch đánh thường 100%, không đứng đơ!
+                            bool tdltBuffNow = ItemTime.isExistItem(ID_ICON_ITEM_TDLT);
+                            if (!tdltBuffNow && GameScr.canAutoPlay)
+                            {
+                                GameScr.canAutoPlay = false;
+                                GameScr.isAutoPlay = false;
+                            }
+
+                            // Tự bật TDLT có sẵn trong hành trang (có giãn nhịp 2.5s tránh spam gói); KHÔNG bao giờ tự tắt TDLT đang chạy!
+                            if (Profile.IsTDLTMode && !tdltBuffNow && GetTimeTDLT() > 0 && now - _lastUseTdltAt >= 2500L)
                             {
                                 _lastUseTdltAt = now;
                                 UseAnyTDLT();
@@ -1513,10 +1528,288 @@ namespace AssemblyCSharp.Mod
             return GameScr.findNPCInMap(fallbackId);
         }
 
+        public enum GemCurrencyMode
+        {
+            TotalGem = 0, // Cộng gộp Ngọc Xanh (luong) + Ngọc Hồng (luongKhoa)
+            GreenOnly = 1, // Chỉ nhận Ngọc Xanh (luong)
+            PinkOnly = 2   // Chỉ nhận Ngọc Hồng (luongKhoa)
+        }
+
+        public struct ShopPriceQuote
+        {
+            public int GemPrice;
+            public int DurationMinutes;
+            public sbyte BuyAction; // 1 = buyGold, 3 = isBuySpec, 0 = buyCoin
+            public GemCurrencyMode Currency;
+            public long UpdatedAtMs;
+        }
+
+        private struct GemGateLock
+        {
+            public int NeedRawWallet;
+            public int RememberedPrice;
+            public GemCurrencyMode Currency;
+            public long LockedUntilMs;
+        }
+
+        private static readonly Dictionary<int, ShopPriceQuote> _shopItemQuotes = new Dictionary<int, ShopPriceQuote>();
+        private static readonly Dictionary<string, int> _rememberedKindPrices = new Dictionary<string, int>();
+        private static readonly Dictionary<string, GemCurrencyMode> _kindCurrencyModes = new Dictionary<string, GemCurrencyMode>();
+        private static readonly Dictionary<string, GemGateLock> _gemGates = new Dictionary<string, GemGateLock>();
+
+        public static bool IsTDLTActive()
+        {
+            return ItemTime.isExistItem(ID_ICON_ITEM_TDLT);
+        }
+
+        public static void ClearGemGatesOnConfigChange()
+        {
+            _gemGates.Clear();
+        }
+
+        private static int ExtractShopItemGemCost(Item it)
+        {
+            if (it == null) return 0;
+            if (it.isBuySpec && it.buySpec > 0) return it.buySpec;
+            if (it.buyGold > 0) return it.buyGold;
+            if (it.buyRuby > 0) return it.buyRuby;
+            return 0;
+        }
+
+        private static int ExtractItemDurationMinutes(Item it)
+        {
+            if (it == null || it.itemOption == null) return 0;
+            int totalMin = 0;
+            for (int j = 0; j < it.itemOption.Length; j++)
+            {
+                var opt = it.itemOption[j];
+                if (opt == null || opt.optionTemplate == null || opt.param <= 0) continue;
+                int oid = opt.optionTemplate.id;
+                if (oid == 63 || oid == 93) totalMin += opt.param * 1440;
+                else if (oid == 64 || oid == 252) totalMin += opt.param * 60;
+                else if (oid == 65 || oid == 9 || oid == 1) totalMin += opt.param;
+            }
+            return totalMin;
+        }
+
+        /// <summary>
+        /// Tự động quét & ghi nhớ Giá ngọc + Thời hạn + Phương thức mua của mọi vật phẩm trong bảng Shop đang mở.
+        /// </summary>
+        public static void LearnPricesFromOpenShop()
+        {
+            var shops = global::Char.myCharz()?.arrItemShop;
+            if (shops == null) return;
+            long now = mSystem.currentTimeMillis();
+            for (int tab = 0; tab < shops.Length; tab++)
+            {
+                if (shops[tab] == null) continue;
+                for (int i = 0; i < shops[tab].Length; i++)
+                {
+                    Item it = shops[tab][i];
+                    if (it == null || it.template == null) continue;
+                    int cost = ExtractShopItemGemCost(it);
+                    if (cost <= 0 && it.buyCoin <= 0) continue;
+
+                    ShopPriceQuote prev;
+                    _shopItemQuotes.TryGetValue(it.template.id, out prev);
+
+                    sbyte buyAct = 1;
+                    GemCurrencyMode curMode = prev.UpdatedAtMs > 0 ? prev.Currency : GemCurrencyMode.TotalGem;
+                    if (it.isBuySpec && it.buySpec > 0)
+                    {
+                        buyAct = 3;
+                        if (it.iconSpec == 861 || it.iconSpec == 7743 || it.iconSpec == 4028)
+                        {
+                            curMode = GemCurrencyMode.PinkOnly;
+                        }
+                    }
+                    else if (it.buyGold <= 0 && it.buyCoin > 0)
+                    {
+                        buyAct = 0;
+                    }
+
+                    int durMin = ExtractItemDurationMinutes(it);
+                    var q = new ShopPriceQuote
+                    {
+                        GemPrice = cost > 0 ? cost : prev.GemPrice,
+                        DurationMinutes = durMin > 0 ? durMin : prev.DurationMinutes,
+                        BuyAction = buyAct,
+                        Currency = curMode,
+                        UpdatedAtMs = now
+                    };
+                    _shopItemQuotes[it.template.id] = q;
+
+                    if (cost > 0)
+                    {
+                        int tid = it.template.id;
+                        if (tid == Profile.TDLTItemID)
+                        {
+                            _rememberedKindPrices["tdlt"] = cost;
+                            if (curMode != GemCurrencyMode.TotalGem) _kindCurrencyModes["tdlt"] = curMode;
+                        }
+                        else if (tid == ID_ITEM_COBONLA)
+                        {
+                            _rememberedKindPrices["lucky"] = cost;
+                            if (curMode != GemCurrencyMode.TotalGem) _kindCurrencyModes["lucky"] = curMode;
+                        }
+                        else if (tid == 1825 || tid == 1823 ||
+                            (!string.IsNullOrEmpty(it.template.name) && it.template.name.ToLower().Contains("vé riêng tư")))
+                        {
+                            _rememberedKindPrices["ticket"] = cost;
+                            if (curMode != GemCurrencyMode.TotalGem) _kindCurrencyModes["ticket"] = curMode;
+                        }
+                    }
+                }
+            }
+        }
+
+        public static void SetRememberedKindPrice(string kind, int gemPrice)
+        {
+            if (!string.IsNullOrEmpty(kind) && gemPrice > 0)
+            {
+                _rememberedKindPrices[kind] = gemPrice;
+            }
+        }
+
+        public static bool HasLearnedKindPrice(string kind)
+        {
+            int p;
+            return _rememberedKindPrices.TryGetValue(kind, out p) && p > 0;
+        }
+
+        public static int GetRememberedKindPrice(string kind, int fallbackPrice)
+        {
+            int p;
+            if (!string.IsNullOrEmpty(kind) && _rememberedKindPrices.TryGetValue(kind, out p) && p > 0)
+            {
+                return p;
+            }
+            return fallbackPrice;
+        }
+
+        public static int GetItemShopGemPrice(int templateId, int fallbackPrice)
+        {
+            ShopPriceQuote q;
+            if (_shopItemQuotes.TryGetValue(templateId, out q) && q.GemPrice > 0)
+            {
+                return q.GemPrice;
+            }
+            return fallbackPrice;
+        }
+
+        public static GemCurrencyMode GetCurrencyModeForKind(string kind)
+        {
+            GemCurrencyMode m;
+            if (!string.IsNullOrEmpty(kind) && _kindCurrencyModes.TryGetValue(kind, out m))
+            {
+                return m;
+            }
+            return GemCurrencyMode.TotalGem;
+        }
+
+        public static int GetRawWalletForMode(GemCurrencyMode mode)
+        {
+            var c = global::Char.myCharz();
+            if (c == null) return 0;
+            int green = System.Math.Max(0, c.luong);
+            int pink = System.Math.Max(0, c.luongKhoa);
+            if (mode == GemCurrencyMode.GreenOnly) return green;
+            if (mode == GemCurrencyMode.PinkOnly) return pink;
+            return green + pink;
+        }
+
+        public static string GetWalletSummaryText()
+        {
+            var c = global::Char.myCharz();
+            if (c == null) return "0 ngọc";
+            return c.luong + " xanh + " + c.luongKhoa + " hồng (giữ " + System.Math.Max(0, Profile.MinGemKeep) + ")";
+        }
+
+        /// <summary>
+        /// Đối chiếu ví Ngọc Xanh + Ngọc Hồng (hoặc ví chuyên biệt đã học) với giá ghi nhớ + khóa GemGate.
+        /// Chừng nào chưa đủ ngọc -> trả false ngay tại bãi farm để nhân vật tiếp tục đánh thường, 0 đi khám shop vô ích!
+        /// </summary>
+        public static bool CanAffordKind(string kind, int fallbackPrice, out int spendable, out int needPrice)
+        {
+            spendable = 0;
+            needPrice = System.Math.Max(1, GetRememberedKindPrice(kind, fallbackPrice));
+            var c = global::Char.myCharz();
+            if (c == null) return false;
+
+            long now = mSystem.currentTimeMillis();
+            int keep = System.Math.Max(0, Profile.MinGemKeep);
+            GemCurrencyMode mode = GetCurrencyModeForKind(kind);
+
+            GemGateLock gate;
+            if (!string.IsNullOrEmpty(kind) && _gemGates.TryGetValue(kind, out gate))
+            {
+                if (now < gate.LockedUntilMs)
+                {
+                    int gateWallet = GetRawWalletForMode(gate.Currency);
+                    if (gateWallet < gate.NeedRawWallet)
+                    {
+                        spendable = System.Math.Max(0, gateWallet - keep);
+                        if (gate.RememberedPrice > 0) needPrice = gate.RememberedPrice;
+                        return false;
+                    }
+                }
+                // Đã nhặt/nạp đủ ngọc vượt ngưỡng khóa (hoặc hết hạn 30p) -> mở khóa tự động!
+                _gemGates.Remove(kind);
+            }
+
+            int rawWallet = GetRawWalletForMode(mode);
+            spendable = System.Math.Max(0, rawWallet - keep);
+            if (spendable < needPrice)
+            {
+                LockKindInsufficientGem(kind, needPrice, false, false);
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Khóa cứng 1 loại mua sắm tại bãi farm cho tới khi số ngọc trong túi thực sự tăng đủ mức cần thiết (hoặc sau 30p).
+        /// </summary>
+        public static void LockKindInsufficientGem(string kind, int neededPrice, bool forceGreenOnly, bool forcePinkOnly)
+        {
+            if (string.IsNullOrEmpty(kind)) return;
+            long now = mSystem.currentTimeMillis();
+            if (neededPrice > 0) _rememberedKindPrices[kind] = neededPrice;
+
+            if (forceGreenOnly) _kindCurrencyModes[kind] = GemCurrencyMode.GreenOnly;
+            else if (forcePinkOnly) _kindCurrencyModes[kind] = GemCurrencyMode.PinkOnly;
+
+            GemCurrencyMode mode = GetCurrencyModeForKind(kind);
+            int rawWallet = GetRawWalletForMode(mode);
+            int keep = System.Math.Max(0, Profile.MinGemKeep);
+            int minTarget = System.Math.Max(rawWallet + 1, System.Math.Max(1, neededPrice) + keep);
+
+            _gemGates[kind] = new GemGateLock
+            {
+                NeedRawWallet = minTarget,
+                RememberedPrice = neededPrice,
+                Currency = mode,
+                LockedUntilMs = now + 1800000L // Nhớ cứng 30 phút (nhưng tự mở khóa 0ms ngay khi nhặt thêm đủ ngọc!)
+            };
+        }
+
+        public static void SendShopBuyPacket(int templateId, sbyte defaultBuyType)
+        {
+            LearnPricesFromOpenShop();
+            sbyte act = defaultBuyType;
+            ShopPriceQuote q;
+            if (_shopItemQuotes.TryGetValue(templateId, out q) && q.UpdatedAtMs > 0)
+            {
+                act = q.BuyAction;
+            }
+            Service.gI().buyItem(act, templateId, 0);
+        }
+
         public static bool ShopHasItem(int templateId)
         {
-            var shops = global::Char.myCharz().arrItemShop;
+            var shops = global::Char.myCharz()?.arrItemShop;
             if (shops == null) return false;
+            LearnPricesFromOpenShop();
             for (int tab = 0; tab < shops.Length; tab++)
             {
                 if (shops[tab] == null) continue;
@@ -1531,29 +1824,41 @@ namespace AssemblyCSharp.Mod
 
         public static bool HasEnoughGem(int price)
         {
-            int need = price + System.Math.Max(0, Profile.MinGemKeep);
+            return HasEnoughGemForKind("", price);
+        }
+
+        public static bool HasEnoughGemForKind(string kind, int price)
+        {
             var c = global::Char.myCharz();
             if (c == null) return false;
-            return c.luong >= need || c.luongKhoa >= need;
+            int need = System.Math.Max(1, price) + System.Math.Max(0, Profile.MinGemKeep);
+            GemCurrencyMode mode = GetCurrencyModeForKind(kind);
+            return GetRawWalletForMode(mode) >= need;
         }
 
         public static int MaxAffordableQty(int unitPrice)
+        {
+            return MaxAffordableQtyForKind("lucky", unitPrice);
+        }
+
+        public static int MaxAffordableQtyForKind(string kind, int unitPrice)
         {
             if (unitPrice <= 0) return 1;
             var c = global::Char.myCharz();
             if (c == null) return 0;
             int keep = System.Math.Max(0, Profile.MinGemKeep);
-            int maxWallet = System.Math.Max(c.luong, c.luongKhoa);
-            int spendable = maxWallet - keep;
+            int wallet = GetRawWalletForMode(GetCurrencyModeForKind(kind));
+            int spendable = wallet - keep;
             return spendable >= unitPrice ? (spendable / unitPrice) : 0;
         }
 
         public static int GetTDLTGemPrice(int itemId)
         {
-            if (itemId == 521) return 1;
-            if (itemId == 1523) return 9;
-            if (itemId == 1524) return 22;
-            return 25;
+            int fallback = 25;
+            if (itemId == 521) fallback = 1;
+            else if (itemId == 1523) fallback = 9;
+            else if (itemId == 1524) fallback = 22;
+            return GetItemShopGemPrice(itemId, fallback);
         }
 
         public static int GetTimeTDLT()
@@ -1689,22 +1994,49 @@ namespace AssemblyCSharp.Mod
 
         public static int GetNextCharmToBuy()
         {
-            var shops = global::Char.myCharz().arrItemShop;
+            int price, minRemain;
+            return GetNextCharmToBuy(out price, out minRemain);
+        }
+
+        public static int GetNextCharmToBuy(out int gemPrice, out int minActiveRemainMinutes)
+        {
+            gemPrice = 0;
+            minActiveRemainMinutes = int.MaxValue;
+            LearnPricesFromOpenShop();
+            var shops = global::Char.myCharz()?.arrItemShop;
             if (shops == null || shops.Length == 0 || shops[0] == null || Profile.CharmIDs == null) return -1;
             for (int i = 0; i < shops[0].Length; i++)
             {
                 Item it = shops[0][i];
-                if (it == null || !Profile.CharmIDs.Contains(it.template.id)) continue;
+                if (it == null || it.template == null || !Profile.CharmIDs.Contains(it.template.id)) continue;
                 bool active = false;
+                int remMin = 0;
                 if (it.itemOption != null)
                 {
                     for (int j = 0; j < it.itemOption.Length; j++)
                     {
-                        if (it.itemOption[j].optionTemplate.name.Contains("Còn")) { active = true; break; }
+                        var opt = it.itemOption[j];
+                        if (opt == null || opt.optionTemplate == null || opt.optionTemplate.name == null) continue;
+                        if (opt.optionTemplate.name.Contains("Còn"))
+                        {
+                            active = true;
+                            int oid = opt.optionTemplate.id;
+                            if (oid == 63 || oid == 93) remMin += System.Math.Max(1, opt.param) * 1440;
+                            else if (oid == 64 || oid == 252) remMin += System.Math.Max(1, opt.param) * 60;
+                            else remMin += System.Math.Max(1, opt.param);
+                        }
                     }
                 }
-                if (!active) return it.template.id;
+                if (active)
+                {
+                    if (remMin > 0 && remMin < minActiveRemainMinutes) minActiveRemainMinutes = remMin;
+                    continue;
+                }
+                gemPrice = ExtractShopItemGemCost(it);
+                if (gemPrice > 0) SetRememberedKindPrice("charm", gemPrice);
+                return it.template.id;
             }
+            if (minActiveRemainMinutes == int.MaxValue) minActiveRemainMinutes = 60;
             return -1;
         }
 
@@ -2088,7 +2420,7 @@ namespace AssemblyCSharp.Mod
 
                 // Góc trên bên trái: tự co gọn theo pixel để KHÔNG BAO GIỜ đè lên cột May Mắn bên phải
                 string mamTxt = IsConMam() ? ("Mam" + (string.IsNullOrEmpty(GetMamRemain()) ? "" : ":" + GetMamRemain())) : "HetMam";
-                string tdltTxt = (GameScr.canAutoPlay || ItemTime.isExistItem(ID_ICON_ITEM_TDLT)) ? "TDLT" : "NoTDLT";
+                string tdltTxt = IsTDLTActive() ? "TDLT" : "NoTDLT";
                 string head = NetProfileMap.HudFullPrefix() + " | " + AutoGame.fsmState + " | K" + TileMap.zoneID + " | " + tdltTxt + " | " + mamTxt;
                 int maxHeadW = GameCanvas.w - luckFont.getWidth(luckHead) - 16;
                 if (mFont.tahoma_7b_yellow.getWidth(head) > maxHeadW && maxHeadW > 80)
