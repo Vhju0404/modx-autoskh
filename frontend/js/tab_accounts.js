@@ -9,6 +9,7 @@ window.MX.AccountsTab = (function () {
     tagFilter: '',
     profileFilter: '',
     selected: new Set(),
+    xrayId: '',
     initialized: false,
   };
 
@@ -113,6 +114,7 @@ window.MX.AccountsTab = (function () {
     syncDropdownFilters();
     renderTableBody();
     updateBulkBar();
+    refreshOpenXRayIfNeeded();
   }
 
   function bindStaticEvents() {
@@ -943,14 +945,11 @@ window.MX.AccountsTab = (function () {
     ]);
   }
 
-  function openAccountXRayModal(id) {
-    const row = (window.MX.state.rows || []).find((r) => r.account.id === id);
-    if (!row) return;
+  function buildXRayInnerHtml(row) {
     const a = row.account;
     const rt = row.runtime;
     const esc = window.MX.esc;
     const priv = window.MX.privacy;
-    const dispUser = priv.maskUser(a.username, a.id);
     const dispChar = priv.maskChar(rt.char_name, 'Chưa vào game');
     const modeLabel = rt.running ? (rt.headless ? '👻 Treo ngầm Headless (0 cửa sổ)' : '👁 Có cửa sổ') : '● Đang nghỉ';
     const expTxt = (typeof rt.last_exp_sec === 'number' && rt.last_exp_sec >= 0)
@@ -965,7 +964,7 @@ window.MX.AccountsTab = (function () {
       ? `<div class="text-dim" style="padding:10px;">Chưa có lịch sử hoạt động trong phiên này.</div>`
       : events.map((line) => `<div style="padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-family:Consolas,monospace;font-size:11.5px;">${esc(priv.maskText(line))}</div>`).join('');
 
-    const body = `
+    return `
       <div class="form-grid" style="margin-bottom:10px;">
         <div class="card" style="padding:10px;margin:0;">
           <div style="font-weight:700;color:#fde68a;margin-bottom:6px;">📡 Trạng Thái Tiến Trình &amp; Vị Trí</div>
@@ -985,11 +984,40 @@ window.MX.AccountsTab = (function () {
           <div class="small-sub"><b>Túi / Rương:</b> T ${rt.bag_used || 0}/${rt.bag_max || 0} · R ${rt.box_used || 0}/${rt.box_max || 0} · <b>Ngọc:</b> 💎${rt.gem || 0}/${rt.gem_lock || 0}</div>
         </div>
       </div>
-      <div style="font-weight:700;color:#cbd5e1;margin-bottom:6px;">📜 25 Bước Hoạt Động Gần Nhất Của Riêng Acc Này (Mới nhất trên cùng)</div>
-      <div style="max-height:240px;overflow:auto;background:#0b101b;border:1px solid var(--border);border-radius:8px;padding:8px 10px;">
+      <div style="font-weight:700;color:#cbd5e1;margin-bottom:6px;">📜 25 Bước Hoạt Động Gần Nhất Của Riêng Acc Này (Tự cập nhật Live)</div>
+      <div id="xray-log-scroll" style="max-height:240px;overflow:auto;background:#0b101b;border:1px solid var(--border);border-radius:8px;padding:8px 10px;">
         ${logsHtml}
       </div>
     `;
+  }
+
+  function refreshOpenXRayIfNeeded() {
+    if (!ui.xrayId) return;
+    const backdrop = document.getElementById('modal-backdrop');
+    const rootEl = document.getElementById('xray-live-root');
+    if (!backdrop || backdrop.classList.contains('hidden') || !rootEl) {
+      ui.xrayId = '';
+      return;
+    }
+    const row = (window.MX.state.rows || []).find((r) => r.account.id === ui.xrayId);
+    if (!row) {
+      ui.xrayId = '';
+      return;
+    }
+    const prevScroll = document.getElementById('xray-log-scroll')?.scrollTop || 0;
+    rootEl.innerHTML = buildXRayInnerHtml(row);
+    const nextScrollEl = document.getElementById('xray-log-scroll');
+    if (nextScrollEl) nextScrollEl.scrollTop = prevScroll;
+  }
+
+  function openAccountXRayModal(id) {
+    const row = (window.MX.state.rows || []).find((r) => r.account.id === id);
+    if (!row) return;
+    ui.xrayId = id;
+    const a = row.account;
+    const rt = row.runtime;
+    const dispUser = window.MX.privacy.maskUser(a.username, a.id);
+    const body = `<div id="xray-live-root">${buildXRayInnerHtml(row)}</div>`;
 
     const footBtns = [];
     if (rt.running && rt.headless) {
@@ -997,6 +1025,7 @@ window.MX.AccountsTab = (function () {
         label: '👁 Mở có hình cầm tay',
         cls: 'btn-sky',
         onClick: async () => {
+          ui.xrayId = '';
           window.MX.modal.close();
           await window.MX.api.StartVisible([id]);
           window.MX.toast('👁 Đang mở lại tab ở chế độ có hình...', 'ok');
@@ -1007,13 +1036,21 @@ window.MX.AccountsTab = (function () {
         label: '👻 Chuyển Treo ngầm',
         cls: 'btn-secondary',
         onClick: async () => {
+          ui.xrayId = '';
           window.MX.modal.close();
           await window.MX.api.StartHeadless([id]);
           window.MX.toast('👻 Đang chuyển sang Treo ngầm Headless...', 'ok');
         }
       });
     }
-    footBtns.push({ label: 'Đóng', cls: 'btn-primary', onClick: () => window.MX.modal.close() });
+    footBtns.push({
+      label: 'Đóng',
+      cls: 'btn-primary',
+      onClick: () => {
+        ui.xrayId = '';
+        window.MX.modal.close();
+      }
+    });
     window.MX.modal.open(`🩻 Soi X-Quang Live — ${dispUser}`, body, footBtns);
   }
 

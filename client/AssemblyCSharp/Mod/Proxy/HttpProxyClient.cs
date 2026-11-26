@@ -307,18 +307,39 @@ namespace ProxyLib.Proxy
             //ignore all of them]
             //<CR><LF>    // Last Empty Line
 
-            // create an byte response array  
-            byte[] response = new byte[_tcpClient.ReceiveBufferSize];
-            StringBuilder sbuilder = new StringBuilder();
-            int bytes = 0;
-            long total = 0;
-
-            do
+            // Đọc từng byte tới đúng ranh giới kết thúc HTTP Header (\r\n\r\n hoặc \n\n)
+            // Tuyệt đối không đọc lố nuốt mất byte đầu tiên của server NRO, và không thoát sớm khi header bị chia 2 gói TCP!
+            StringBuilder sbuilder = new StringBuilder(128);
+            int maxHeaderBytes = 8192;
+            int readCount = 0;
+            bool gotHeaderEnd = false;
+            while (readCount < maxHeaderBytes)
             {
-                bytes = stream.Read(response, 0, _tcpClient.ReceiveBufferSize);
-                total += bytes;
-                sbuilder.Append(System.Text.ASCIIEncoding.UTF8.GetString(response, 0, bytes));
-            } while (stream.DataAvailable);
+                int b = stream.ReadByte();
+                if (b < 0)
+                {
+                    break;
+                }
+                readCount++;
+                sbuilder.Append((char)b);
+                int n = sbuilder.Length;
+                if (n >= 4 &&
+                    sbuilder[n - 4] == '\r' && sbuilder[n - 3] == '\n' &&
+                    sbuilder[n - 2] == '\r' && sbuilder[n - 1] == '\n')
+                {
+                    gotHeaderEnd = true;
+                    break;
+                }
+                if (n >= 2 && sbuilder[n - 2] == '\n' && sbuilder[n - 1] == '\n')
+                {
+                    gotHeaderEnd = true;
+                    break;
+                }
+            }
+            if (!gotHeaderEnd && sbuilder.Length == 0)
+            {
+                throw new ProxyException("Empty HTTP CONNECT response from proxy server.");
+            }
 
             ParseResponse(sbuilder.ToString());
 

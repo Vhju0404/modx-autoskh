@@ -96,3 +96,40 @@ func TestProbeNROHandshake(t *testing.T) {
 		t.Error("expected ProbeNROHandshake to return false for non-NRO reply")
 	}
 }
+
+func TestCollectNewlyDroppedSKHNoFalseAlertOnStoreAndDetectsSecondCopy(t *testing.T) {
+	aoKakarotBag := model.LootItem{TemplateID: 2, Name: "Áo vải", Slot: "Áo", IsSKH: true, SetName: "Kakarot", Stars: 0, Location: "bag"}
+	aoKakarotBox := model.LootItem{TemplateID: 2, Name: "Áo vải", Slot: "Áo", IsSKH: true, SetName: "Kakarot", Stars: 0, Location: "box"}
+	quanKakarotBag := model.LootItem{TemplateID: 8, Name: "Quần vải", Slot: "Quần", IsSKH: true, SetName: "Kakarot", Stars: 1, Location: "bag"}
+
+	// 1. Khởi tạo lúc mới vào game: đang có sẵn 1 Áo Kakarot trong túi -> baseline = 1
+	maxSeen := countSKHBySig([]model.LootItem{aoKakarotBag})
+	if len(maxSeen) != 1 {
+		t.Fatalf("expected 1 baseline sig, got %d", len(maxSeen))
+	}
+
+	// 2. Về nhà cất Áo Kakarot sang rương (giả lập cả trường hợp gói BAG về trước làm trống 1 nhịp rồi gói BOX mới tới)
+	if got := collectNewlyDroppedSKH(maxSeen, nil); len(got) != 0 {
+		t.Fatalf("expected 0 drops on transient empty tick, got %d", len(got))
+	}
+	if got := collectNewlyDroppedSKH(maxSeen, []model.LootItem{aoKakarotBox}); len(got) != 0 {
+		t.Fatalf("expected 0 false alerts when moving SKH from bag to box, got %d", len(got))
+	}
+
+	// 3. Đi farm nhặt thêm cái Áo Kakarot thứ 2 giống hệt (1 trong rương + 1 mới trong túi = tổng 2) -> phải báo đúng 1 món mới!
+	gotSecond := collectNewlyDroppedSKH(maxSeen, []model.LootItem{aoKakarotBox, aoKakarotBag})
+	if len(gotSecond) != 1 || gotSecond[0].Slot != "Áo" {
+		t.Fatalf("expected 1 new drop for 2nd identical SKH item, got %+v", gotSecond)
+	}
+
+	// 4. Cất nốt cái thứ 2 vào rương (2 cái trong rương) -> 0 báo giả!
+	if got := collectNewlyDroppedSKH(maxSeen, []model.LootItem{aoKakarotBox, aoKakarotBox}); len(got) != 0 {
+		t.Fatalf("expected 0 false alerts when storing 2nd item into box, got %d", len(got))
+	}
+
+	// 5. Nhặt thêm Quần Kakarot 1 sao mới -> báo đúng 1 món Quần!
+	gotPants := collectNewlyDroppedSKH(maxSeen, []model.LootItem{aoKakarotBox, aoKakarotBox, quanKakarotBag})
+	if len(gotPants) != 1 || gotPants[0].Slot != "Quần" {
+		t.Fatalf("expected 1 new drop for Quần Kakarot, got %+v", gotPants)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"math/rand"
 	"net"
@@ -35,7 +36,7 @@ type Manager struct {
 	desiredRunning     map[string]bool        // Giữ 24/7: mọi tab đã bấm Chạy tự mở lại khi tắt/lag/crash cho tới khi bấm Dừng!
 	restartTimes       map[string][]time.Time // Circuit breaker: đếm số lần restart trong 10 phút
 	fatalErrors        map[string]string      // Chặn auto-reopen khi sai mật khẩu / bị khóa acc
-	knownLootKeys      map[string]map[string]bool
+	knownLootCounts    map[string]map[string]int
 	ramHighSince       map[string]time.Time // Mốc bắt đầu vượt ngưỡng RAM liên tục (chốt chặn 3 phút chống tắt oan)
 	ramLastTrimAt      map[string]time.Time // Mốc gần nhất đã xả RAM nhẹ cho tab
 	headlessLastTrimAt map[string]time.Time // Mốc gần nhất trim nhẹ WorkingSet cho tab Headless (mỗi 90s)
@@ -64,9 +65,9 @@ func New(st *store.Store, onStateChanged func()) *Manager {
 		telegram:       notify.NewTelegramClient(),
 		runtimes:       make(map[string]*model.AccountRuntime),
 		desiredRunning: make(map[string]bool),
-		restartTimes:   make(map[string][]time.Time),
-		fatalErrors:    make(map[string]string),
-		knownLootKeys:  make(map[string]map[string]bool),
+		restartTimes:       make(map[string][]time.Time),
+		fatalErrors:        make(map[string]string),
+		knownLootCounts:    make(map[string]map[string]int),
 		ramHighSince:       make(map[string]time.Time),
 		ramLastTrimAt:      make(map[string]time.Time),
 		headlessLastTrimAt: make(map[string]time.Time),
@@ -423,7 +424,7 @@ func (m *Manager) PurgeAccounts(ids []string) {
 		delete(m.desiredRunning, id)
 		delete(m.restartTimes, id)
 		delete(m.fatalErrors, id)
-		delete(m.knownLootKeys, id)
+		delete(m.knownLootCounts, id)
 		delete(m.ramHighSince, id)
 		delete(m.ramLastTrimAt, id)
 		delete(m.headlessLastTrimAt, id)
@@ -446,7 +447,7 @@ func (m *Manager) SyncAccountUpdated(oldAcc, newAcc model.Account) {
 		delete(m.desiredRunning, newAcc.ID)
 		delete(m.restartTimes, newAcc.ID)
 		delete(m.fatalErrors, newAcc.ID)
-		delete(m.knownLootKeys, newAcc.ID)
+		delete(m.knownLootCounts, newAcc.ID)
 		m.mu.Unlock()
 		_ = m.store.DeleteLootHistoryByAccounts([]string{newAcc.ID})
 	} else {
@@ -1060,24 +1061,14 @@ func (m *Manager) handleTelemetry(accountID string, t protocol.TelemetryPayload)
 		appendAccHistoryLocked(rt, fmt.Sprintf("[%s] %s · %s", t.FSMState, t.StatusText, locTag))
 	}
 
-	// Phát hiện món SKH mới xuất hiện lần đầu trong phiên để ghi lịch sử + báo Telegram
-	seen, initialized := m.knownLootKeys[accountID]
+	// Phát hiện món SKH mới bằng mốc đếm cao nhất (gộp chung hành trang + rương nhà):
+	// - Cất đồ từ túi vào rương (kể cả khi server gửi tách 2 gói BAG/BOX) không bao giờ báo nổ giả lần 2.
+	// - Nhặt thêm món SKH thứ 2 trùng hệt tên/sao vẫn tăng tổng và báo nổ chuẩn 100%.
+	maxSeen, initialized := m.knownLootCounts[accountID]
 	if !initialized {
-		seen = make(map[string]bool)
-		for _, it := range normLoot {
-			seen[lootKey(it)] = true
-		}
-		m.knownLootKeys[accountID] = seen
+		m.knownLootCounts[accountID] = countSKHBySig(normLoot)
 	} else {
-		for _, it := range normLoot {
-			k := lootKey(it)
-			if !seen[k] {
-				seen[k] = true
-				if it.IsSKH {
-					newSKH = append(newSKH, it)
-				}
-			}
-		}
+		newSKH = collectNewlyDroppedSKH(maxSeen, normLoot)
 	}
 	m.mu.Unlock()
 
@@ -1113,7 +1104,8 @@ func (m *Manager) handleEvent(accountID string, e protocol.EventPayload) {
 		m.addLog("LOOT", uname, "Rương nhà đã đầy — đánh dấu hoàn thành!")
 		if cfg.TelegramEnabled && cfg.NotifyOnBoxFull {
 			go m.telegram.Send(cfg.TelegramBotToken, cfg.TelegramChatID, "boxfull_"+accountID, 10*time.Minute,
-				fmt.Sprintf("<b>[%s]</b>\n📦 <b>Full Rương Nhà!</b>\nAcc: <code>%s</code>\n%s", store.NotifyHeaderText(), uname, e.Message))
+				fmt.Sprintf("<b>[%s]</b>\n📦 <b>Full Rương Nhà!</b>\nAcc: <code>%s</code>\n%s",
+					html.EscapeString(store.NotifyHeaderText()), html.EscapeString(uname), html.EscapeString(e.Message)))
 		}
 	case "low_gem":
 		m.mu.Lock()
@@ -1122,11 +1114,22 @@ func (m *Manager) handleEvent(accountID string, e protocol.EventPayload) {
 		m.addLog("WARN", uname, e.Message)
 		if cfg.TelegramEnabled && cfg.NotifyOnLowGem {
 			go m.telegram.Send(cfg.TelegramBotToken, cfg.TelegramChatID, "lowgem_"+accountID, 30*time.Minute,
-				fmt.Sprintf("<b>[%s]</b>\n💎 <b>Sắp hết Ngọc!</b>\nAcc: <code>%s</code>\n%s", store.NotifyHeaderText(), uname, e.Message))
+				fmt.Sprintf("<b>[%s]</b>\n💎 <b>Sắp hết Ngọc!</b>\nAcc: <code>%s</code>\n%s",
+					html.EscapeString(store.NotifyHeaderText()), html.EscapeString(uname), html.EscapeString(e.Message)))
 		}
 	case "skh_drop":
 		if e.Item != nil {
-			m.onNewSKHDropped(accountID, loot.NormalizeItems([]model.LootItem{*e.Item}))
+			norm := loot.NormalizeItems([]model.LootItem{*e.Item})
+			m.mu.Lock()
+			if seen, ok := m.knownLootCounts[accountID]; ok {
+				for _, it := range norm {
+					if it.IsSKH {
+						seen[lootItemSig(it)]++
+					}
+				}
+			}
+			m.mu.Unlock()
+			m.onNewSKHDropped(accountID, norm)
 		}
 	case "stuck":
 		m.mu.Lock()
@@ -1214,7 +1217,8 @@ func (m *Manager) handleEvent(accountID string, e protocol.EventPayload) {
 		m.addLog("ERROR", uname, "Dừng auto-relog: "+reason)
 		if cfg.TelegramEnabled {
 			go m.telegram.Send(cfg.TelegramBotToken, cfg.TelegramChatID, "fatal_"+accountID, 30*time.Minute,
-				fmt.Sprintf("<b>[%s]</b>\n⛔ <b>Lỗi Đăng Nhập (Đã dừng tự relog)</b>\nAcc: <code>%s</code>\nLý do: %s", store.NotifyHeaderText(), uname, reason))
+				fmt.Sprintf("<b>[%s]</b>\n⛔ <b>Lỗi Đăng Nhập (Đã dừng tự relog)</b>\nAcc: <code>%s</code>\nLý do: %s",
+					html.EscapeString(store.NotifyHeaderText()), html.EscapeString(uname), html.EscapeString(reason)))
 		}
 		go func() {
 			time.Sleep(1500 * time.Millisecond)
@@ -1236,7 +1240,7 @@ func (m *Manager) handleDisconnect(accountID string) {
 		delete(m.desiredRunning, accountID)
 		delete(m.restartTimes, accountID)
 		delete(m.fatalErrors, accountID)
-		delete(m.knownLootKeys, accountID)
+		delete(m.knownLootCounts, accountID)
 	} else if rt, ok := m.runtimes[accountID]; ok {
 		rt.Connected = false
 		if !launcher.IsProcessAlive(rt.PID) {
@@ -1274,7 +1278,12 @@ func (m *Manager) onNewSKHDropped(accountID string, items []model.LootItem) {
 		m.addLog("LOOT", acc.Username, fmt.Sprintf("NỔ SKH: %s — Set %s%s", it.Name, it.SetName, starTxt))
 		if cfg.TelegramEnabled && cfg.NotifyOnSKH {
 			msg := fmt.Sprintf("<b>[%s]</b>\n🔥 <b>NỔ ĐỒ SET KÍCH HOẠT!</b>\nAcc: <code>%s</code> (%s)\nMón: <b>%s</b>\nBộ: <b>Set %s</b>%s",
-				store.NotifyHeaderText(), acc.Username, sv.Name, it.Name, it.SetName, starTxt)
+				html.EscapeString(store.NotifyHeaderText()),
+				html.EscapeString(acc.Username),
+				html.EscapeString(sv.Name),
+				html.EscapeString(it.Name),
+				html.EscapeString(it.SetName),
+				html.EscapeString(starTxt))
 			go m.telegram.Send(cfg.TelegramBotToken, cfg.TelegramChatID, "", 0, msg)
 		}
 	}
@@ -1285,7 +1294,11 @@ func (m *Manager) onNewSKHDropped(accountID string, items []model.LootItem) {
 			if gs.CompleteSets > 0 {
 				go m.telegram.Send(cfg.TelegramBotToken, cfg.TelegramChatID,
 					fmt.Sprintf("fullset_%s_%d", gs.SetName, gs.CompleteSets), 1*time.Hour,
-					fmt.Sprintf("<b>[%s]</b>\n🏆 <b>ĐỦ 5/5 SET %s (%s)!</b>\nTổng bộ hoàn chỉnh hiện có: <b>%d bộ</b>", store.NotifyHeaderText(), gs.SetName, gs.Planet, gs.CompleteSets))
+					fmt.Sprintf("<b>[%s]</b>\n🏆 <b>ĐỦ 5/5 SET %s (%s)!</b>\nTổng bộ hoàn chỉnh hiện có: <b>%d bộ</b>",
+						html.EscapeString(store.NotifyHeaderText()),
+						html.EscapeString(gs.SetName),
+						html.EscapeString(gs.Planet),
+						gs.CompleteSets))
 			}
 		}
 	}
@@ -1323,6 +1336,8 @@ func (m *Manager) tickSupervisor() {
 	m.outsideSchedule = outsideSched
 	if outsideSched {
 		m.maintReason = "Nghỉ ngoài khung giờ ca chạy"
+	} else if prevOutSched && !m.inMaintenance {
+		m.maintReason = ""
 	}
 	m.mu.Unlock()
 
@@ -1433,7 +1448,7 @@ func (m *Manager) tickSupervisor() {
 			delete(m.desiredRunning, id)
 			delete(m.restartTimes, id)
 			delete(m.fatalErrors, id)
-			delete(m.knownLootKeys, id)
+			delete(m.knownLootCounts, id)
 			delete(m.ramHighSince, id)
 			delete(m.ramLastTrimAt, id)
 			delete(m.headlessLastTrimAt, id)
@@ -1854,8 +1869,35 @@ func (m *Manager) notifyUI() {
 	}
 }
 
-func lootKey(it model.LootItem) string {
-	return fmt.Sprintf("%d|%s|%s|%d|%s", it.TemplateID, it.SetName, it.Slot, it.Stars, it.Location)
+func lootItemSig(it model.LootItem) string {
+	return fmt.Sprintf("%d|%s|%s|%d", it.TemplateID, it.SetName, it.Slot, it.Stars)
+}
+
+func countSKHBySig(items []model.LootItem) map[string]int {
+	counts := make(map[string]int)
+	for _, it := range items {
+		if it.IsSKH {
+			counts[lootItemSig(it)]++
+		}
+	}
+	return counts
+}
+
+func collectNewlyDroppedSKH(maxSeen map[string]int, items []model.LootItem) []model.LootItem {
+	curCounts := make(map[string]int)
+	var newlyDropped []model.LootItem
+	for _, it := range items {
+		if !it.IsSKH {
+			continue
+		}
+		sig := lootItemSig(it)
+		curCounts[sig]++
+		if curCounts[sig] > maxSeen[sig] {
+			maxSeen[sig] = curCounts[sig]
+			newlyDropped = append(newlyDropped, it)
+		}
+	}
+	return newlyDropped
 }
 
 func randomDelayMs(minMs, maxMs int) time.Duration {

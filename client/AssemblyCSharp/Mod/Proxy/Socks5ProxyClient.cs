@@ -330,6 +330,20 @@ namespace ProxyLib.Proxy
                 _proxyAuthMethod = SocksAuthentication.None;
         }
        
+        private static void ReadExact(NetworkStream stream, byte[] buffer, int offset, int count)
+        {
+            int total = 0;
+            while (total < count)
+            {
+                int got = stream.Read(buffer, offset + total, count - total);
+                if (got <= 0)
+                {
+                    throw new ProxyException("Unexpected EOF while reading SOCKS5 handshake response.");
+                }
+                total += got;
+            }
+        }
+
         private void NegotiateServerAuthMethod()
         {
             //  get a reference to the network stream
@@ -377,7 +391,7 @@ namespace ProxyLib.Proxy
 
             //  receive the server response 
             byte[] response = new byte[2];
-            stream.Read(response, 0, response.Length);
+            ReadExact(stream, response, 0, response.Length);
 
             //  the first byte contains the socks version number (e.g. 5)
             //  the second byte contains the auth method acceptable to the proxy server
@@ -444,7 +458,7 @@ namespace ProxyLib.Proxy
 
                 // read the response from the proxy server
                 byte[] crResponse = new byte[2];
-                stream.Read(crResponse, 0, crResponse.Length);
+                ReadExact(stream, crResponse, 0, crResponse.Length);
 
                 // check to see if the proxy server accepted the credentials
                 if (crResponse[1] != 0)
@@ -569,12 +583,38 @@ namespace ProxyLib.Proxy
             // RSV RESERVED
             // ATYP address itemType of following address
 
-            byte[] response = new byte[255];
-            
-            // read proxy server response
-            stream.Read(response, 0, response.Length);
-            
-            byte replyCode = response[1];
+            // Đọc chính xác theo độ dài khung RFC 1928 (không đọc lố sang gói cmd -27 của game, không đọc thiếu khi mạng tách gói!)
+            byte[] hdr = new byte[4];
+            ReadExact(stream, hdr, 0, 4);
+
+            byte[] response;
+            switch (hdr[3])
+            {
+                case SOCKS5_ADDRTYPE_IPV4:
+                    response = new byte[4 + 4 + 2];
+                    Buffer.BlockCopy(hdr, 0, response, 0, 4);
+                    ReadExact(stream, response, 4, 6);
+                    break;
+                case SOCKS5_ADDRTYPE_IPV6:
+                    response = new byte[4 + 16 + 2];
+                    Buffer.BlockCopy(hdr, 0, response, 0, 4);
+                    ReadExact(stream, response, 4, 18);
+                    break;
+                case SOCKS5_ADDRTYPE_DOMAIN_NAME:
+                    byte[] lenByte = new byte[1];
+                    ReadExact(stream, lenByte, 0, 1);
+                    int domLen = lenByte[0];
+                    response = new byte[4 + 1 + domLen + 2];
+                    Buffer.BlockCopy(hdr, 0, response, 0, 4);
+                    response[4] = lenByte[0];
+                    ReadExact(stream, response, 5, domLen + 2);
+                    break;
+                default:
+                    response = hdr;
+                    break;
+            }
+
+            byte replyCode = hdr[1];
 
             //  evaluate the reply code for an error condition
             if (replyCode != SOCKS5_CMD_REPLY_SUCCEEDED)

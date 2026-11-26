@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -332,49 +333,65 @@ func IsWindowHung(hwnd uintptr) bool {
 	return r != 0
 }
 
-// FindMainWindowByPID tìm đúng cửa sổ game chính (ưu tiên UnityWndClass, bỏ qua IME/UAC overlay).
-func FindMainWindowByPID(pid int) uintptr {
-	var unityHwnd uintptr
-	var fallbackHwnd uintptr
-	cb := syscall.NewCallback(func(hwnd uintptr, lparam uintptr) uintptr {
-		vis, _, _ := procIsWindowVisible.Call(hwnd)
-		if vis == 0 {
-			return 1
-		}
-		var wpid uint32
-		_, _, _ = procGetWindowThreadProcID.Call(hwnd, uintptr(unsafe.Pointer(&wpid)))
-		if int(wpid) != pid {
-			return 1
-		}
-		clsBuf := make([]uint16, 64)
-		n, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&clsBuf[0])), uintptr(len(clsBuf)))
-		cls := ""
-		if n > 0 {
-			cls = syscall.UTF16ToString(clsBuf[:n])
-		}
-		if cls == "UnityWndClass" {
-			unityHwnd = hwnd
-			return 0
-		}
-		lowCls := strings.ToLower(cls)
-		if strings.Contains(lowCls, "uac") || strings.Contains(lowCls, "ime") || strings.Contains(lowCls, "tooltip") {
-			return 1
-		}
-		if fallbackHwnd == 0 {
-			var r rect
-			if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok != 0 {
-				if (r.Right-r.Left) >= 120 && (r.Bottom-r.Top) >= 100 {
-					fallbackHwnd = hwnd
-				}
+var (
+	enumWinMu        sync.Mutex
+	findWinTargetPID int
+	findWinUnity     uintptr
+	findWinFallback  uintptr
+	findWinCallback  = syscall.NewCallback(enumFindMainWindowProc)
+	crashDlgCallback = syscall.NewCallback(enumCloseCrashDialogsProc)
+)
+
+func enumFindMainWindowProc(hwnd uintptr, lparam uintptr) uintptr {
+	vis, _, _ := procIsWindowVisible.Call(hwnd)
+	if vis == 0 {
+		return 1
+	}
+	var wpid uint32
+	_, _, _ = procGetWindowThreadProcID.Call(hwnd, uintptr(unsafe.Pointer(&wpid)))
+	if int(wpid) != findWinTargetPID {
+		return 1
+	}
+	var clsBuf [64]uint16
+	n, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&clsBuf[0])), uintptr(len(clsBuf)))
+	cls := ""
+	if n > 0 {
+		cls = syscall.UTF16ToString(clsBuf[:n])
+	}
+	if cls == "UnityWndClass" {
+		findWinUnity = hwnd
+		return 0
+	}
+	lowCls := strings.ToLower(cls)
+	if strings.Contains(lowCls, "uac") || strings.Contains(lowCls, "ime") || strings.Contains(lowCls, "tooltip") {
+		return 1
+	}
+	if findWinFallback == 0 {
+		var r rect
+		if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok != 0 {
+			if (r.Right-r.Left) >= 120 && (r.Bottom-r.Top) >= 100 {
+				findWinFallback = hwnd
 			}
 		}
-		return 1
-	})
-	_, _, _ = procEnumWindows.Call(cb, 0)
-	if unityHwnd != 0 {
-		return unityHwnd
 	}
-	return fallbackHwnd
+	return 1
+}
+
+// FindMainWindowByPID tìm đúng cửa sổ game chính (dùng callback singleton không rò rỉ slot Win32 khi chạy 24/7).
+func FindMainWindowByPID(pid int) uintptr {
+	if pid <= 0 {
+		return 0
+	}
+	enumWinMu.Lock()
+	defer enumWinMu.Unlock()
+	findWinTargetPID = pid
+	findWinUnity = 0
+	findWinFallback = 0
+	_, _, _ = procEnumWindows.Call(findWinCallback, 0)
+	if findWinUnity != 0 {
+		return findWinUnity
+	}
+	return findWinFallback
 }
 
 // SetWindowTitle đổi tiêu đề cửa sổ game.
@@ -450,27 +467,42 @@ func ArrangeGrid(hwnds []uintptr, targetW, targetH int) {
 	}
 }
 
-// CloseCrashDialogs đóng popup crash Unity ("Oops!", "Fatal", "UnityCrashHandler").
-func CloseCrashDialogs() {
-	cb := syscall.NewCallback(func(hwnd uintptr, lparam uintptr) uintptr {
-		vis, _, _ := procIsWindowVisible.Call(hwnd)
-		if vis == 0 {
-			return 1
-		}
-		buf := make([]uint16, 256)
-		n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-		if n > 0 {
-			title := strings.ToLower(syscall.UTF16ToString(buf[:n]))
-			if strings.Contains(title, "oops!") ||
-				strings.Contains(title, "dragonboy_vn_v231.exe") ||
-				strings.Contains(title, "unitycrashhandler") ||
-				strings.Contains(title, "fatal error") {
-				_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
-			}
-		}
+func enumCloseCrashDialogsProc(hwnd uintptr, lparam uintptr) uintptr {
+	vis, _, _ := procIsWindowVisible.Call(hwnd)
+	if vis == 0 {
 		return 1
-	})
-	_, _, _ = procEnumWindows.Call(cb, 0)
+	}
+	var buf [256]uint16
+	n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 {
+		return 1
+	}
+	title := strings.ToLower(syscall.UTF16ToString(buf[:n]))
+	if strings.Contains(title, "unitycrashhandler") ||
+		strings.Contains(title, "oops!") ||
+		strings.Contains(title, "fatal error") {
+		_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
+		return 1
+	}
+	if strings.Contains(title, "dragonboy_vn_v231.exe") {
+		var clsBuf [64]uint16
+		cn, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&clsBuf[0])), uintptr(len(clsBuf)))
+		cls := ""
+		if cn > 0 {
+			cls = syscall.UTF16ToString(clsBuf[:cn])
+		}
+		if cls == "#32770" || strings.Contains(title, "application error") || strings.Contains(title, "stopped working") {
+			_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
+		}
+	}
+	return 1
+}
+
+// CloseCrashDialogs đóng popup crash Unity ("Oops!", "Fatal", "UnityCrashHandler", hộp thoại lỗi #32770).
+func CloseCrashDialogs() {
+	enumWinMu.Lock()
+	defer enumWinMu.Unlock()
+	_, _, _ = procEnumWindows.Call(crashDlgCallback, 0)
 }
 
 func sanitizeFile(s string) string {

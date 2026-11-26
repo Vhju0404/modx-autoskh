@@ -14,6 +14,8 @@ public class Session_ME : ISession
 {
 	public class Sender
 	{
+		private readonly object sendLock = new object();
+
 		public List<Message> sendingMessage;
 
 		public Sender()
@@ -23,7 +25,22 @@ public class Session_ME : ISession
 
 		public void AddMessage(Message message)
 		{
-			sendingMessage.Add(message);
+			if (message == null)
+			{
+				return;
+			}
+			lock (sendLock)
+			{
+				sendingMessage.Add(message);
+			}
+		}
+
+		public void Clear()
+		{
+			lock (sendLock)
+			{
+				sendingMessage.Clear();
+			}
 		}
 
 		public void run()
@@ -34,11 +51,22 @@ public class Session_ME : ISession
 				{
 					if (getKeyComplete)
 					{
-						while (sendingMessage.Count > 0)
+						while (connected)
 						{
-							Message m = sendingMessage[0];
-							doSendMessage(m);
-							sendingMessage.RemoveAt(0);
+							Message m = null;
+							lock (sendLock)
+							{
+								if (sendingMessage.Count == 0)
+								{
+									break;
+								}
+								m = sendingMessage[0];
+								sendingMessage.RemoveAt(0);
+							}
+							if (m != null)
+							{
+								doSendMessage(m);
+							}
 						}
 					}
 					try
@@ -289,6 +317,8 @@ public class Session_ME : ISession
 
 	public static MyVector recieveMsg;
 
+	private static readonly object recvLock = new object();
+
 	public Session_ME()
 	{
 		Debug.Log("init Session_ME");
@@ -296,7 +326,7 @@ public class Session_ME : ISession
 
 	public void clearSendingMessage()
 	{
-		sender.sendingMessage.Clear();
+		sender.Clear();
 	}
 
 	public static Session_ME gI()
@@ -365,24 +395,7 @@ public class Session_ME : ISession
 
 	public void doConnect(string host, int port)
 	{
-        //sc = new TcpClient();
-        //sc.Connect(host, port);
-        sc = new TcpClient();
-        if (string.IsNullOrEmpty(Account.proxy) || Account.proxy.Equals("home"))
-        {
-            sc.Connect(host, port);
-        }
-        else
-        {
-			ProxyType proxyType = Account.proxyType == "socks5" ? ProxyType.Socks5 : ProxyType.Http;
-            char[] separators = new char[] { '|', ',', ':' };
-			string[] proxy = Account.proxy.Split(separators, StringSplitOptions.RemoveEmptyEntries);
-			string adress = proxy[0].Trim();
-			int post = int.Parse(proxy[1].Trim());
-			string username = proxy.Length >= 3 ? proxy[2].Trim() : string.Empty;
-            string password = proxy.Length >= 4 ? proxy[3].Trim() : string.Empty;
-            sc = FakeProxy.ProxyFaker(proxyType, host, port, adress, post, username, password);
-        }
+		sc = FakeProxy.ConnectThroughConfiguredProxy(host, port);
         dataStream = sc.GetStream();
         IPAddress ipAddress = ((IPEndPoint)sc.Client.RemoteEndPoint).Address;
 		GameEvents.IpConnect = ipAddress.ToString();
@@ -413,9 +426,13 @@ public class Session_ME : ISession
 
 	private static void doSendMessage(Message m)
 	{
-		sbyte[] data = m.getData();
+		if (m == null)
+		{
+			return;
+		}
 		try
 		{
+			sbyte[] data = m.getData();
 			if (getKeyComplete)
 			{
 				sbyte value = writeKey(m.command);
@@ -497,32 +514,48 @@ public class Session_ME : ISession
 
 	public static void onRecieveMsg(Message msg)
 	{
+		if (msg == null)
+		{
+			return;
+		}
 		if (Thread.CurrentThread.Name == Main.mainThreadName)
 		{
-			messageHandler.onMessage(msg);
+			if (messageHandler != null)
+			{
+				messageHandler.onMessage(msg);
+			}
 		}
 		else
 		{
-			recieveMsg.addElement(msg);
+			lock (recvLock)
+			{
+				recieveMsg.addElement(msg);
+			}
 		}
 	}
 
 	public static void update()
 	{
-		while (recieveMsg.size() > 0)
+		while (true)
 		{
-			Message message = (Message)recieveMsg.elementAt(0);
 			if (Controller.isStopReadMessage)
 			{
 				break;
 			}
-			if (message == null)
+			Message message = null;
+			lock (recvLock)
 			{
+				if (recieveMsg.size() == 0)
+				{
+					break;
+				}
+				message = (Message)recieveMsg.elementAt(0);
 				recieveMsg.removeElementAt(0);
-				break;
 			}
-			messageHandler.onMessage(message);
-			recieveMsg.removeElementAt(0);
+			if (message != null && messageHandler != null)
+			{
+				messageHandler.onMessage(message);
+			}
 		}
 	}
 

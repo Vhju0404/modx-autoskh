@@ -20,6 +20,37 @@ namespace AssemblyCSharp.Mod
             proxyClient.SendTimeout = 60000;
             return proxyClient.CreateConnection(targetHost, targetPort);
         }
+
+        public static TcpClient ConnectThroughConfiguredProxy(string targetHost, int targetPort)
+        {
+            string raw = (LoadData.Account.proxy ?? "").Trim();
+            if (string.IsNullOrEmpty(raw) || string.Equals(raw, "home", StringComparison.OrdinalIgnoreCase))
+            {
+                TcpClient direct = new TcpClient();
+                direct.Connect(targetHost, targetPort);
+                return direct;
+            }
+
+            ProxyType proxyType = string.Equals(LoadData.Account.proxyType, "socks5", StringComparison.OrdinalIgnoreCase)
+                ? ProxyType.Socks5
+                : ProxyType.Http;
+
+            char sep = ':';
+            if (raw.IndexOf('|') >= 0) sep = '|';
+            else if (raw.IndexOf(',') >= 0 && raw.IndexOf(':') < 0) sep = ',';
+
+            // Giới hạn tối đa 4 phần để bảo toàn mật khẩu proxy chứa dấu ':', '|', ','
+            string[] parts = raw.Split(new char[] { sep }, 4);
+            if (parts.Length < 2)
+            {
+                throw new InvalidOperationException("Sai định dạng proxy: " + raw);
+            }
+            string proxyHost = parts[0].Trim();
+            int proxyPort = int.Parse(parts[1].Trim());
+            string username = parts.Length >= 3 ? parts[2].Trim() : string.Empty;
+            string password = parts.Length >= 4 ? parts[3].Trim() : string.Empty;
+            return ProxyFaker(proxyType, targetHost, targetPort, proxyHost, proxyPort, username, password);
+        }
     }
 
     public static class LoadData

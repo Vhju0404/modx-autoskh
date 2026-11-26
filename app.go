@@ -388,6 +388,11 @@ func (a *App) AddAccountsBulk(req BulkAddRequest) (BulkAddResult, error) {
 				customPrx = proxy.NormalizeRaw(cp)
 				prxID = "custom"
 			}
+		} else if sep == ":" && len(parts) >= 4 && strings.Contains(parts[2], ".") {
+			if cp, err := proxy.ParseLine(strings.Join(parts[2:], ":"), "http"); err == nil {
+				customPrx = proxy.NormalizeRaw(cp)
+				prxID = "custom"
+			}
 		} else {
 			if len(parts) >= 3 && strings.TrimSpace(parts[2]) != "" {
 				svRaw := strings.TrimSpace(parts[2])

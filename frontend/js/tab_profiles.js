@@ -23,6 +23,15 @@ window.MX.ProfilesTab = (function () {
 
   let activeId = '';
 
+  function numOr(v, def) {
+    return typeof v === 'number' && !Number.isNaN(v) ? v : def;
+  }
+
+  function intInput(id, def) {
+    const n = parseInt(document.getElementById(id).value, 10);
+    return Number.isNaN(n) ? def : n;
+  }
+
   function render() {
     const root = document.getElementById('tab-profiles');
     const st = window.MX.state;
@@ -131,10 +140,10 @@ window.MX.ProfilesTab = (function () {
               <option value="fixed" ${p.zone_strategy === 'fixed' ? 'selected' : ''}>Khu cố định</option>
             </select>
           </div>
-          <div class="field"><label>Khu cố định (nếu chọn)</label><input type="number" id="p-fzone" value="${p.fixed_zone_id || 0}" min="0" max="99" /></div>
-          <div class="field"><label>Đổi khu nếu người &gt;</label><input type="number" id="p-maxpl" value="${p.max_players_zone || 3}" min="1" max="15" /></div>
-          <div class="field"><label>Đổi khu nếu không TN (giây)</label><input type="number" id="p-noexpsw" value="${p.no_exp_switch_sec || 35}" min="0" max="300" /></div>
-          <div class="field"><label>Thoát tab nếu không TN (giây)</label><input type="number" id="p-noexprs" value="${p.no_exp_restart_sec || 95}" min="30" max="600" /></div>
+          <div class="field"><label>Khu cố định (nếu chọn)</label><input type="number" id="p-fzone" value="${numOr(p.fixed_zone_id, 0)}" min="0" max="99" /></div>
+          <div class="field"><label>Đổi khu nếu người &gt;</label><input type="number" id="p-maxpl" value="${numOr(p.max_players_zone, 3)}" min="0" max="15" /></div>
+          <div class="field"><label>Đổi khu nếu không TN (giây)</label><input type="number" id="p-noexpsw" value="${numOr(p.no_exp_switch_sec, 35)}" min="0" max="300" /></div>
+          <div class="field"><label>Thoát tab nếu không TN (giây)</label><input type="number" id="p-noexprs" value="${numOr(p.no_exp_restart_sec, 95)}" min="30" max="600" /></div>
         </div>
       </div>
 
@@ -201,15 +210,15 @@ window.MX.ProfilesTab = (function () {
               <option value="1524" ${p.tdlt_item_id === 1524 ? 'selected' : ''}>TDLT 3 (1524 — 22 ngọc)</option>
             </select>
           </div>
-          <div class="field"><label>Mua TDLT đạt tối thiểu (phút)</label><input type="number" id="p-tdltmin" value="${p.tdlt_min_minutes || 20}" min="0" /></div>
+          <div class="field"><label>Mua TDLT đạt tối thiểu (phút)</label><input type="number" id="p-tdltmin" value="${numOr(p.tdlt_min_minutes, 20)}" min="0" /></div>
           <div class="field">
             <label class="check-row"><input type="checkbox" id="p-buylucky" ${p.auto_buy_lucky ? 'checked' : ''} /> Tự mua &amp; dùng Cỏ 4 lá (1635)</label>
-            <input type="number" id="p-luckyqty" value="${p.lucky_grass_qty || 1}" min="1" max="99" placeholder="Số lượng" />
+            <input type="number" id="p-luckyqty" value="${numOr(p.lucky_grass_qty, 1)}" min="1" max="99" placeholder="Số lượng" />
           </div>
-          <div class="field"><label>Giữ lại tối thiểu (Ngọc)</label><input type="number" id="p-mingem" value="${p.min_gem_keep || 0}" min="0" /></div>
-          <div class="field"><label>Ăn đậu khi HP &lt; (%)</label><input type="number" id="p-beanhp" value="${p.auto_bean_hp || 25}" min="0" max="95" /></div>
-          <div class="field"><label>Ăn đậu khi MP &lt; (%)</label><input type="number" id="p-beanmp" value="${p.auto_bean_mp || 20}" min="0" max="95" /></div>
-          <div class="field"><label>Ăn nho tím thể lực &lt; (%)</label><input type="number" id="p-grape" value="${p.auto_purple_grape || 10}" min="0" max="95" /></div>
+          <div class="field"><label>Giữ lại tối thiểu (Ngọc)</label><input type="number" id="p-mingem" value="${numOr(p.min_gem_keep, 0)}" min="0" /></div>
+          <div class="field"><label>Ăn đậu khi HP &lt; (%)</label><input type="number" id="p-beanhp" value="${numOr(p.auto_bean_hp, 25)}" min="0" max="95" /></div>
+          <div class="field"><label>Ăn đậu khi MP &lt; (%)</label><input type="number" id="p-beanmp" value="${numOr(p.auto_bean_mp, 20)}" min="0" max="95" /></div>
+          <div class="field"><label>Ăn nho tím thể lực &lt; (%)</label><input type="number" id="p-grape" value="${numOr(p.auto_purple_grape, 10)}" min="0" max="95" /></div>
           <div class="field"><label class="check-row" style="margin-top:20px;"><input type="checkbox" id="p-askbean" ${p.auto_ask_clan_bean ? 'checked' : ''} /> Tự xin đậu Bang (mỗi 5p)</label></div>
         </div>
 
@@ -319,13 +328,13 @@ window.MX.ProfilesTab = (function () {
           default_map_nm: parseInt(document.getElementById('p-map-nm').value, 10),
           default_map_xd: parseInt(document.getElementById('p-map-xd').value, 10),
           zone_strategy: document.getElementById('p-zstrat').value,
-          fixed_zone_id: parseInt(document.getElementById('p-fzone').value, 10) || 0,
-          max_players_zone: parseInt(document.getElementById('p-maxpl').value, 10) || 3,
-          no_exp_switch_sec: parseInt(document.getElementById('p-noexpsw').value, 10) || 0,
-          no_exp_restart_sec: parseInt(document.getElementById('p-noexprs').value, 10) || 95,
+          fixed_zone_id: Math.max(0, intInput('p-fzone', 0)),
+          max_players_zone: Math.max(0, intInput('p-maxpl', 3)),
+          no_exp_switch_sec: Math.max(0, intInput('p-noexpsw', 0)),
+          no_exp_restart_sec: Math.max(30, intInput('p-noexprs', 95)),
           keep_all_skh: document.getElementById('p-keepall').checked,
           keep_skh_sets: keepSets,
-          min_keep_stars: parseInt(document.getElementById('p-minstars').value, 10) || 0,
+          min_keep_stars: Math.max(0, intInput('p-minstars', 0)),
           on_box_full: document.getElementById('p-boxfull').value,
           auto_store_house: document.getElementById('p-store').checked,
           auto_sell_trash: document.getElementById('p-sell').checked,
@@ -334,18 +343,18 @@ window.MX.ProfilesTab = (function () {
           sell_item_ids: parseIntList(document.getElementById('p-sellids').value),
           drop_item_ids: parseIntList(document.getElementById('p-dropids').value),
           auto_buy_tdlt: document.getElementById('p-buytdlt').checked,
-          tdlt_item_id: parseInt(document.getElementById('p-tdltid').value, 10) || 521,
-          tdlt_min_minutes: parseInt(document.getElementById('p-tdltmin').value, 10) || 0,
+          tdlt_item_id: intInput('p-tdltid', 521),
+          tdlt_min_minutes: Math.max(0, intInput('p-tdltmin', 0)),
           auto_buy_lucky: document.getElementById('p-buylucky').checked,
-          lucky_grass_qty: parseInt(document.getElementById('p-luckyqty').value, 10) || 1,
+          lucky_grass_qty: Math.max(1, intInput('p-luckyqty', 1)),
           auto_buy_ticket: document.getElementById('p-buyticket').checked,
           auto_buy_goldbar: document.getElementById('p-buygoldbar').checked,
           auto_get_title: document.getElementById('p-gettitle').checked,
           pet_wiggle: document.getElementById('p-petwiggle').checked,
-          min_gem_keep: parseInt(document.getElementById('p-mingem').value, 10) || 0,
-          auto_bean_hp: parseInt(document.getElementById('p-beanhp').value, 10) || 25,
-          auto_bean_mp: parseInt(document.getElementById('p-beanmp').value, 10) || 20,
-          auto_purple_grape: parseInt(document.getElementById('p-grape').value, 10) || 10,
+          min_gem_keep: Math.max(0, intInput('p-mingem', 0)),
+          auto_bean_hp: Math.max(0, intInput('p-beanhp', 25)),
+          auto_bean_mp: Math.max(0, intInput('p-beanmp', 20)),
+          auto_purple_grape: Math.max(0, intInput('p-grape', 10)),
           auto_ask_clan_bean: document.getElementById('p-askbean').checked,
           auto_buy_charm: document.getElementById('p-buycharm').checked,
           charm_duration: document.getElementById('p-charmdur').value,

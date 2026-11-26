@@ -12,6 +12,8 @@ public class Session_ME2 : ISession
 {
 	public class Sender
 	{
+		private readonly object sendLock = new object();
+
 		public List<Message> sendingMessage;
 
 		public Sender()
@@ -21,7 +23,22 @@ public class Session_ME2 : ISession
 
 		public void AddMessage(Message message)
 		{
-			sendingMessage.Add(message);
+			if (message == null)
+			{
+				return;
+			}
+			lock (sendLock)
+			{
+				sendingMessage.Add(message);
+			}
+		}
+
+		public void Clear()
+		{
+			lock (sendLock)
+			{
+				sendingMessage.Clear();
+			}
 		}
 
 		public void run()
@@ -32,11 +49,22 @@ public class Session_ME2 : ISession
 				{
 					if (getKeyComplete)
 					{
-						while (sendingMessage.Count > 0)
+						while (connected)
 						{
-							Message m = sendingMessage[0];
-							doSendMessage(m);
-							sendingMessage.RemoveAt(0);
+							Message m = null;
+							lock (sendLock)
+							{
+								if (sendingMessage.Count == 0)
+								{
+									break;
+								}
+								m = sendingMessage[0];
+								sendingMessage.RemoveAt(0);
+							}
+							if (m != null)
+							{
+								doSendMessage(m);
+							}
 						}
 					}
 					try
@@ -193,7 +221,7 @@ public class Session_ME2 : ISession
 				{
 					b = readKey(b);
 				}
-				if (b == -32 || b == -66 || b == 11 || b == -67 || b == -74 || b == -87)
+				if (b == -32 || b == -66 || b == 11 || b == -67 || b == -74 || b == -87 || b == 66)
 				{
 					return readMessage2(b);
 				}
@@ -285,6 +313,8 @@ public class Session_ME2 : ISession
 
 	public static MyVector recieveMsg = new MyVector();
 
+	private static readonly object recvLock = new object();
+
 	public Session_ME2()
 	{
 		Debug.Log("init Session_ME");
@@ -292,7 +322,7 @@ public class Session_ME2 : ISession
 
 	public void clearSendingMessage()
 	{
-		sender.sendingMessage.Clear();
+		sender.Clear();
 	}
 
 	public static Session_ME2 gI()
@@ -353,7 +383,8 @@ public class Session_ME2 : ISession
 	}
 
 	public void doConnect(string host, int port)
-	{	
+	{
+		sc = FakeProxy.ConnectThroughConfiguredProxy(host, port);
 		dataStream = sc.GetStream();
 		dis = new BinaryReader(dataStream, new UTF8Encoding());
 		dos = new BinaryWriter(dataStream, new UTF8Encoding());
@@ -378,9 +409,13 @@ public class Session_ME2 : ISession
 
 	private static void doSendMessage(Message m)
 	{
-		sbyte[] data = m.getData();
+		if (m == null)
+		{
+			return;
+		}
 		try
 		{
+			sbyte[] data = m.getData();
 			if (getKeyComplete)
 			{
 				sbyte value = writeKey(m.command);
@@ -462,32 +497,48 @@ public class Session_ME2 : ISession
 
 	public static void onRecieveMsg(Message msg)
 	{
+		if (msg == null)
+		{
+			return;
+		}
 		if (Thread.CurrentThread.Name == Main.mainThreadName)
 		{
-			messageHandler.onMessage(msg);
+			if (messageHandler != null)
+			{
+				messageHandler.onMessage(msg);
+			}
 		}
 		else
 		{
-			recieveMsg.addElement(msg);
+			lock (recvLock)
+			{
+				recieveMsg.addElement(msg);
+			}
 		}
 	}
 
 	public static void update()
 	{
-		while (recieveMsg.size() > 0)
+		while (true)
 		{
-			Message message = (Message)recieveMsg.elementAt(0);
 			if (Controller.isStopReadMessage)
 			{
 				break;
 			}
-			if (message == null)
+			Message message = null;
+			lock (recvLock)
 			{
+				if (recieveMsg.size() == 0)
+				{
+					break;
+				}
+				message = (Message)recieveMsg.elementAt(0);
 				recieveMsg.removeElementAt(0);
-				break;
 			}
-			messageHandler.onMessage(message);
-			recieveMsg.removeElementAt(0);
+			if (message != null && messageHandler != null)
+			{
+				messageHandler.onMessage(message);
+			}
 		}
 	}
 

@@ -11,6 +11,14 @@ namespace AssemblyCSharp.Mod
             if (!AutoGame.isAuto || AutoGame.isPaused || !PickMob.IsTanSat || GameEvents.Profile.FastAttackNoAnim)
                 return;
 
+            MainThreadDispatcher.dispatcher(ExecuteOnMainThread);
+        }
+
+        private static void ExecuteOnMainThread()
+        {
+            if (!AutoGame.isAuto || AutoGame.isPaused || !PickMob.IsTanSat || GameEvents.Profile.FastAttackNoAnim)
+                return;
+
             var myChar = global::Char.myCharz();
             if (myChar == null || myChar.meDead || myChar.cHP <= 0)
                 return;
@@ -22,8 +30,7 @@ namespace AssemblyCSharp.Mod
             }
             if (desired != null && myChar.myskill != desired)
             {
-                Skill chosen = desired;
-                MainThreadDispatcher.dispatcher(() => GameScr.gI().doSelectSkill(chosen, true));
+                GameScr.gI().doSelectSkill(desired, true);
             }
 
             MyVector vMob = new MyVector();

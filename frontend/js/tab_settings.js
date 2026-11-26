@@ -64,7 +64,7 @@ window.MX.SettingsTab = (function () {
           <div class="field"><label>Cao cửa sổ game (px)</label><input type="number" id="s-h" value="${cfg.window_height || 240}" min="140" max="720" /></div>
           <div class="field"><label>Giãn nhịp mở tab Min (ms)</label><input type="number" id="s-dmin" value="${cfg.login_delay_min_ms || 2000}" min="500" /></div>
           <div class="field"><label>Giãn nhịp mở tab Max (ms)</label><input type="number" id="s-dmax" value="${cfg.login_delay_max_ms || 4000}" min="500" /></div>
-          <div class="field"><label>Số Acc tối đa / 1 Proxy</label><input type="number" id="s-maxprx" value="${cfg.max_acc_per_proxy || 2}" min="0" max="50" /></div>
+          <div class="field"><label>Số Acc tối đa / 1 Proxy</label><input type="number" id="s-maxprx" value="${typeof cfg.max_acc_per_proxy === 'number' ? cfg.max_acc_per_proxy : 2}" min="0" max="50" /></div>
           <div class="field"><label>Timeout khởi động tab (giây)</label><input type="number" id="s-stimeout" value="${cfg.startup_timeout_sec || 45}" min="20" /></div>
           <div class="field"><label>Circuit Breaker (lỗi tối đa / 10 phút)</label><input type="number" id="s-cbreak" value="${cfg.max_restarts_10min || 5}" min="2" /></div>
           <div class="field">
@@ -187,6 +187,10 @@ window.MX.SettingsTab = (function () {
         })).filter((w) => w.start && w.end);
 
         const maxRamRaw = parseInt(document.getElementById('s-maxram').value, 10);
+        const maxPrxRaw = parseInt(document.getElementById('s-maxprx').value, 10);
+        const newSockPort = parseInt(document.getElementById('s-port').value, 10) || 20268;
+        const newUiPort = parseInt(document.getElementById('s-uiport').value, 10) || 20269;
+        const portChanged = (cfg.socket_port && newSockPort !== cfg.socket_port) || (cfg.ui_port && newUiPort !== cfg.ui_port);
         await window.MX.api.SaveSettings({
           max_tabs: parseInt(document.getElementById('s-maxtabs').value, 10) || 5,
           window_width: parseInt(document.getElementById('s-w').value, 10) || 380,
@@ -194,13 +198,13 @@ window.MX.SettingsTab = (function () {
           auto_arrange_grid: document.getElementById('s-grid').checked,
           login_delay_min_ms: parseInt(document.getElementById('s-dmin').value, 10) || 2000,
           login_delay_max_ms: parseInt(document.getElementById('s-dmax').value, 10) || 4000,
-          max_acc_per_proxy: parseInt(document.getElementById('s-maxprx').value, 10) || 0,
+          max_acc_per_proxy: Number.isNaN(maxPrxRaw) ? 2 : Math.max(0, maxPrxRaw),
           auto_rotate_proxy: document.getElementById('s-rotprx').checked,
           startup_timeout_sec: parseInt(document.getElementById('s-stimeout').value, 10) || 45,
           max_restarts_10min: parseInt(document.getElementById('s-cbreak').value, 10) || 5,
           max_tab_ram_mb: Number.isNaN(maxRamRaw) ? 380 : Math.max(0, maxRamRaw),
-          socket_port: parseInt(document.getElementById('s-port').value, 10) || 20268,
-          ui_port: parseInt(document.getElementById('s-uiport').value, 10) || 20269,
+          socket_port: newSockPort,
+          ui_port: newUiPort,
           game_exe_path: document.getElementById('s-exe').value.trim(),
           schedule_enabled: document.getElementById('s-sched-on').checked,
           schedule_windows: schedWindows,
@@ -217,7 +221,12 @@ window.MX.SettingsTab = (function () {
           notify_on_proxy_die: true,
           privacy_mode: Boolean(window.MX.privacy.isOn()),
         });
-        window.MX.toast('Đã lưu cài đặt hệ thống!', 'ok');
+        window.MX.toast(
+          portChanged
+            ? 'Đã lưu cài đặt! (Khởi động lại QLTK nếu bạn vừa đổi cổng Socket / Web UI)'
+            : 'Đã lưu cài đặt hệ thống!',
+          'ok'
+        );
         await window.MX.refreshBootstrap();
       } catch (err) { window.MX.toast(String(err), 'err'); }
     };
