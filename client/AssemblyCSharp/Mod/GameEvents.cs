@@ -67,6 +67,9 @@ namespace AssemblyCSharp.Mod
         // Trạng thái tự đăng nhập lại & chặn spam khi sai mật khẩu / khóa tài khoản
         private static bool _fatalLoginBlock = false;
         private static bool _hasLoggedInOnce = false;
+        private static bool _waitingConnectForLogin = false;
+        private static long _connectWaitStartAt = 0;
+        private static long _splashStuckSince = 0;
         private static long _nextReloginAt = 0;
         private static int _reloginAttempts = 0;
         private static long _lastGlobalTickAt = 0;
@@ -154,6 +157,31 @@ namespace AssemblyCSharp.Mod
             }
         }
 
+        public static void RequestAutoLogin()
+        {
+            if (string.IsNullOrEmpty(Account.username) || _fatalLoginBlock) return;
+            long now = mSystem.currentTimeMillis();
+            GameCanvas.endDlg();
+            if (GameCanvas.loginScr == null) GameCanvas.loginScr = new LoginScr();
+            if (GameCanvas.currentScreen != GameCanvas.loginScr) GameCanvas.loginScr.switchToMe();
+
+            if (Session_ME.gI().IsReadyForLogin())
+            {
+                _waitingConnectForLogin = false;
+                Service.gI().login("", "", GameMidlet.VERSION, 0);
+                GameCanvas.startWaitDlg();
+                return;
+            }
+
+            _waitingConnectForLogin = true;
+            _connectWaitStartAt = now;
+            if (!Session_ME.connected && !Session_ME.connecting)
+            {
+                GameCanvas.connect();
+            }
+            GameCanvas.startWaitDlg();
+        }
+
         public static void onServerListScreenLoaded()
         {
             if (string.IsNullOrEmpty(Account.username) || _fatalLoginBlock) return;
@@ -167,14 +195,12 @@ namespace AssemblyCSharp.Mod
             }
             _hasLoggedInOnce = true;
             _nextReloginAt = now + 18000L; // Fallback nếu gói login đầu tiên bị treo
-            if (GameCanvas.loginScr == null) GameCanvas.loginScr = new LoginScr();
-            GameCanvas.loginScr.switchToMe();
-            Service.gI().login("", "", GameMidlet.VERSION, 0);
-            GameCanvas.startWaitDlg();
+            RequestAutoLogin();
         }
 
         public static void OnDisconnected()
         {
+            _waitingConnectForLogin = false;
             if (string.IsNullOrEmpty(Account.username) || _fatalLoginBlock) return;
             long now = mSystem.currentTimeMillis();
             long delay = System.Math.Min(25000L, 6500L + _reloginAttempts * 2500L);
@@ -371,6 +397,28 @@ namespace AssemblyCSharp.Mod
                 }
                 _clientInputOpenedAt = 0;
 
+                if (_waitingConnectForLogin)
+                {
+                    if (_fatalLoginBlock)
+                    {
+                        _waitingConnectForLogin = false;
+                    }
+                    else if (Session_ME.gI().IsReadyForLogin())
+                    {
+                        _waitingConnectForLogin = false;
+                        LoginScr.timeLogin = 0;
+                        Service.gI().login("", "", GameMidlet.VERSION, 0);
+                        GameCanvas.startWaitDlg();
+                        return;
+                    }
+                    else if (now - _connectWaitStartAt > 15000L)
+                    {
+                        _waitingConnectForLogin = false;
+                        Session_ME.gI().close();
+                        _nextReloginAt = now + 4000L;
+                    }
+                }
+
                 if (now - _lastGlobalTickAt < 500L) return;
                 _lastGlobalTickAt = now;
 
@@ -387,6 +435,8 @@ namespace AssemblyCSharp.Mod
                 if (inGame)
                 {
                     _hasLoggedInOnce = true;
+                    _waitingConnectForLogin = false;
+                    _splashStuckSince = 0;
                     _reloginAttempts = 0;
                     _nextReloginAt = 0;
                     _lastDialogStatus = "";
@@ -394,16 +444,29 @@ namespace AssemblyCSharp.Mod
                 }
 
                 if (string.IsNullOrEmpty(Account.username) || _fatalLoginBlock) return;
+                if (GameCanvas.currentScreen == SplashScr.instance)
+                {
+                    if (_splashStuckSince == 0) _splashStuckSince = now;
+                    else if (now - _splashStuckSince > 15000L)
+                    {
+                        _splashStuckSince = now;
+                        if (GameCanvas.loginScr == null) GameCanvas.loginScr = new LoginScr();
+                        GameCanvas.loginScr.switchToMe();
+                    }
+                    return;
+                }
+                _splashStuckSince = 0;
                 if (GameCanvas.currentScreen != GameCanvas.loginScr && GameCanvas.currentScreen != GameCanvas.serverScreen) return;
                 if (GameCanvas.currentScreen == GameCanvas.serverScreen && ServerListScreen.isGetData) return;
 
-                // Bắn nhịp tim login (tối đa 8 lần relog nội bộ; quá 8 lần dừng bắn để Go Watchdog mở lại tab sạch)
+                // Bắn nhịp tim login (tối đa 8 lần relog nội bộ; quá 8 lần chủ động thoát để Go Watchdog mở mới / xoay Proxy)
                 if (_reloginAttempts < 8 && now - _lastLoginHbAt >= 10000L)
                 {
                     _lastLoginHbAt = now;
                     SocketClient.SendEvent("login_heartbeat", string.IsNullOrEmpty(_lastDialogStatus) ? "Đang chờ tự đăng nhập lại..." : _lastDialogStatus);
                 }
 
+                if (_waitingConnectForLogin) return;
                 if (GameCanvas.currentScreen == GameCanvas.loginScr && LoginScr.timeLogin > 0) return;
 
                 if (_nextReloginAt == 0)
@@ -412,18 +475,20 @@ namespace AssemblyCSharp.Mod
                     return;
                 }
 
-                if (now >= _nextReloginAt && _reloginAttempts < 8)
+                if (now >= _nextReloginAt)
                 {
+                    if (_reloginAttempts >= 8)
+                    {
+                        SocketClient.SendEvent("stuck", "Tự đăng nhập lại thất bại quá 8 lần -> thoát tab để QLTK mở mới");
+                        Main.exit();
+                        return;
+                    }
                     _reloginAttempts++;
                     LoginScr.timeLogin = 0;
                     _nextReloginAt = now + System.Math.Min(30000L, 9000L + _reloginAttempts * 3000L);
                     GameCanvas.endDlg();
                     Session_ME.gI().close();
-                    GameCanvas.connect();
-                    if (GameCanvas.loginScr == null) GameCanvas.loginScr = new LoginScr();
-                    if (GameCanvas.currentScreen != GameCanvas.loginScr) GameCanvas.loginScr.switchToMe();
-                    Service.gI().login("", "", GameMidlet.VERSION, 0);
-                    GameCanvas.startWaitDlg();
+                    RequestAutoLogin();
                     _lastDialogStatus = "Tự đăng nhập lại (lần " + _reloginAttempts + ")...";
                     SocketClient.SendEvent("login_status", _lastDialogStatus);
                 }

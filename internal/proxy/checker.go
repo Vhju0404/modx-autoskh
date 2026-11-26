@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -252,31 +251,45 @@ func CheckOneAuto(ctx context.Context, raw string, targetHost string, targetPort
 	return p, false, 0, checkErr
 }
 
-// CheckOne kiểm tra proxy HTTP CONNECT hoặc SOCKS5 thật tới targetHost:targetPort và đo ping (ms).
-func CheckOne(ctx context.Context, p model.ProxyItem, targetHost string, targetPort int, timeout time.Duration) (bool, int64, error) {
+// DialTarget mở kết nối TCP xuyên qua Proxy (HTTP CONNECT hoặc SOCKS5) tới đích targetHost:targetPort.
+// Luồng trả về đã đọc sạch hoàn toàn byte header của Proxy (không rò rỉ byte thừa làm hỏng gói -27 NRO).
+func DialTarget(ctx context.Context, p model.ProxyItem, targetHost string, targetPort int, timeout time.Duration) (net.Conn, error) {
 	if timeout <= 0 {
 		timeout = 6 * time.Second
 	}
-	start := time.Now()
 	dialer := net.Dialer{Timeout: timeout}
 	addr := net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return false, 0, err
+		return nil, err
 	}
-	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	if strings.ToLower(p.Type) == "socks5" {
 		if err := handshakeSOCKS5(conn, p, targetHost, targetPort); err != nil {
-			return false, 0, err
+			_ = conn.Close()
+			return nil, err
 		}
-		return true, time.Since(start).Milliseconds(), nil
+		_ = conn.SetDeadline(time.Time{})
+		return conn, nil
 	}
 
 	if err := handshakeHTTPConnect(conn, p, targetHost, targetPort); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
+}
+
+// CheckOne kiểm tra proxy HTTP CONNECT hoặc SOCKS5 thật tới targetHost:targetPort và đo ping (ms).
+func CheckOne(ctx context.Context, p model.ProxyItem, targetHost string, targetPort int, timeout time.Duration) (bool, int64, error) {
+	start := time.Now()
+	conn, err := DialTarget(ctx, p, targetHost, targetPort, timeout)
+	if err != nil {
 		return false, 0, err
 	}
+	_ = conn.Close()
 	return true, time.Since(start).Milliseconds(), nil
 }
 
@@ -292,13 +305,26 @@ func handshakeHTTPConnect(conn net.Conn, p model.ProxyItem, targetHost string, t
 	if _, err := conn.Write([]byte(b.String())); err != nil {
 		return err
 	}
-	reader := bufio.NewReader(conn)
-	statusLine, err := reader.ReadString('\n')
-	if err != nil {
-		return err
+	// Đọc từng byte tới đúng ranh giới \r\n\r\n để tuyệt đối không nuốt lẹm byte dữ liệu đầu tiên của server NRO
+	var hdr []byte
+	var one [1]byte
+	for len(hdr) < 8192 {
+		if _, err := conn.Read(one[:]); err != nil {
+			return err
+		}
+		hdr = append(hdr, one[0])
+		n := len(hdr)
+		if n >= 4 && hdr[n-4] == '\r' && hdr[n-3] == '\n' && hdr[n-2] == '\r' && hdr[n-1] == '\n' {
+			break
+		}
 	}
-	if !strings.Contains(statusLine, " 200 ") {
-		return fmt.Errorf("http proxy từ chối: %s", strings.TrimSpace(statusLine))
+	hdrStr := string(hdr)
+	firstLine := hdrStr
+	if idx := strings.Index(hdrStr, "\r\n"); idx >= 0 {
+		firstLine = hdrStr[:idx]
+	}
+	if !strings.Contains(firstLine, " 200") {
+		return fmt.Errorf("http proxy từ chối: %s", strings.TrimSpace(firstLine))
 	}
 	return nil
 }
@@ -413,7 +439,25 @@ func CheckBatch(ctx context.Context, list []model.ProxyItem, targetHost string, 
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
-				ok, ping, _ := CheckOne(ctx, out[idx], targetHost, targetPort, 6*time.Second)
+				cur := out[idx]
+				ok, ping, _ := CheckOne(ctx, cur, targetHost, targetPort, 6*time.Second)
+				if !ok {
+					// Nếu dòng gốc người dùng nhập không ép cứng http:// hay socks5:// -> tự thử chéo giao thức còn lại!
+					_, explicit, perr := ParseLineDetailed(cur.Raw, cur.Type)
+					if perr == nil && !explicit {
+						alt := cur
+						if strings.ToLower(alt.Type) == "socks5" {
+							alt.Type = "http"
+						} else {
+							alt.Type = "socks5"
+						}
+						if ok2, ping2, _ := CheckOne(ctx, alt, targetHost, targetPort, 6*time.Second); ok2 {
+							out[idx].Type = alt.Type
+							ok = true
+							ping = ping2
+						}
+					}
+				}
 				out[idx].LastCheckAt = model.NowUnixMs()
 				if ok {
 					out[idx].Status = "live"

@@ -314,7 +314,7 @@ public class InfoMe
 		{
 			AssemblyCSharp.Mod.GameEvents.CheckServerMaintenanceText(s, false);
 		}
-		playerID = c.charID;
+		playerID = (c != null) ? c.charID : 0;
 		info.addInfo(s, 3, c, isChatServer);
 		isDone = false;
 	}

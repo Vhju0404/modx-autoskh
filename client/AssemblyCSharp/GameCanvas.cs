@@ -499,7 +499,13 @@ public class GameCanvas : IActionListener
         {
             return;
         }
-        if (GameCanvas.bug > 40)
+        if (AutoGame.isAuto)
+        {
+            // AutoGame đã có cầu chì Xmap 60s/120s chuẩn; không dùng cmx/cmy vì map nhỏ camera bị khóa biên dễ thoát oan
+            GameCanvas.bug = 0;
+            return;
+        }
+        if (GameCanvas.bug > 80)
         {
             Main.exit();
         }
@@ -510,7 +516,8 @@ public class GameCanvas : IActionListener
             GameCanvas.lastCmy = GameScr.cmy;
             return;
         }
-        if (GameCanvas.gameTick % (6 * (int)Time.timeScale) == 0)
+        int step1 = System.Math.Max(6, 6 * (int)Time.timeScale);
+        if (GameCanvas.gameTick % step1 == 0)
         {
             GameCanvas.bug++;
         }
@@ -521,7 +528,7 @@ public class GameCanvas : IActionListener
         {
             return;
         }
-        if (GameCanvas.bug2 > 40)
+        if (GameCanvas.bug2 > 75)
         {
             Main.exit();
         }
@@ -531,7 +538,8 @@ public class GameCanvas : IActionListener
             GameCanvas.lastMap = TileMap.mapID;
             return;
         }
-        if (GameCanvas.gameTick % (6 * (int)Time.timeScale) == 0)
+        int step2 = System.Math.Max(6, 6 * (int)Time.timeScale);
+        if (GameCanvas.gameTick % step2 == 0)
         {
             GameCanvas.bug2++;
         }
@@ -549,7 +557,8 @@ public class GameCanvas : IActionListener
             Main.exit();
             return;
         }
-        if (GameCanvas.gameTick % (6 * (int)Time.timeScale) == 0)
+        int step3 = System.Math.Max(6, 6 * (int)Time.timeScale);
+        if (GameCanvas.gameTick % step3 == 0)
         {
             if (global::Char.isLoadingMap || global::Char.ischangingMap || global::Char.myCharz().isInEnterOfflinePoint() != null || global::Char.myCharz().isInEnterOnlinePoint() != null || global::Char.myCharz().isInWaypoint())
             {
@@ -567,9 +576,6 @@ public class GameCanvas : IActionListener
     public static int lastCmy;
     public void update()
 	{
-		FixBug();
-		FixBug2();
-		//CheckBug();
         if (gameTick % 5 == 0)
 		{
 			timeNow = mSystem.currentTimeMillis();
@@ -577,6 +583,8 @@ public class GameCanvas : IActionListener
 		Res.updateOnScreenDebug();
 		try
 		{
+			FixBug();
+			FixBug2();
 			if (TouchScreenKeyboard.visible)
 			{
 				timeOpenKeyBoard++;
@@ -737,6 +745,7 @@ public class GameCanvas : IActionListener
                     AutoGame.isAuto = true;
                     Service.gI().setClientType();
 					Service.gI().androidPack();
+					Session_ME.clientTypeSent = true;
 				}
 				else
 				{
@@ -881,6 +890,7 @@ public class GameCanvas : IActionListener
 		}
 		isResume = true;
 		LoginScr.isContinueToLogin = false;
+		GameEvents.OnDisconnected();
 		if (loginScr != null)
 		{
 			instance.resetToLoginScrz();
@@ -2497,10 +2507,11 @@ public class GameCanvas : IActionListener
 
 	public static void startOK(string info, int actionID, object p)
 	{
-		if(info.Contains(mResources.pls_restart_game_error))
+		if (info != null && info.Contains(mResources.pls_restart_game_error))
 		{
 			Main.exit();
 		}
+		GameEvents.OnDialogMessage(info);
 		closeKeyBoard();
 		msgdlg.setInfo(info, null, new Command(mResources.OK, instance, actionID, p), null);
 		msgdlg.show();

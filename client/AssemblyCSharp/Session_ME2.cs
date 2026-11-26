@@ -86,11 +86,18 @@ public class Session_ME2 : ISession
 
 	private class MessageCollector
 	{
+		private readonly int connGen;
+
+		public MessageCollector(int gen)
+		{
+			connGen = gen;
+		}
+
 		public void run()
 		{
 			try
 			{
-				while (connected)
+				while (connected && connGen == _connGen)
 				{
 					Message message = readMessage();
 					if (message == null)
@@ -127,7 +134,7 @@ public class Session_ME2 : ISession
 				Debug.Log("error read message!");
 				Debug.Log(ex3.Message.ToString());
 			}
-			if (!connected)
+			if (!connected || connGen != _connGen)
 			{
 				return;
 			}
@@ -142,7 +149,7 @@ public class Session_ME2 : ISession
 					messageHandler.onConnectionFail(isMainSession);
 				}
 			}
-			if (sc != null)
+			if (sc != null && connGen == _connGen)
 			{
 				cleanNetwork();
 			}
@@ -183,7 +190,10 @@ public class Session_ME2 : ISession
 			while (offset < count)
 			{
 				int got = reader.Read(buf, offset, count - offset);
-				if (got <= 0) break;
+				if (got <= 0)
+				{
+					throw new EndOfStreamException("NRO stream2 closed mid-packet");
+				}
 				offset += got;
 			}
 			return buf;
@@ -293,6 +303,8 @@ public class Session_ME2 : ISession
 
 	private static bool getKeyComplete;
 
+	private static int _connGen;
+
 	public static sbyte[] key = null;
 
 	private static sbyte curR;
@@ -348,33 +360,42 @@ public class Session_ME2 : ISession
 	{
 		if (!connected && !connecting)
 		{
+			int myGen = Interlocked.Increment(ref _connGen);
 			this.host = host;
 			this.port = port;
 			getKeyComplete = false;
+			connecting = true;
 			sc = null;
 			Debug.Log("connecting...!");
 			Debug.Log("host: " + host);
 			Debug.Log("port: " + port);
 			initThread = new Thread(NetworkInit);
 			initThread.IsBackground = true;
-			initThread.Start();
+			initThread.Start(myGen);
 		}
 	}
 
-	private void NetworkInit()
+	private void NetworkInit(object state)
 	{
+		int myGen = (state is int) ? (int)state : _connGen;
 		isCancel = false;
 		connecting = true;
 		Thread.CurrentThread.Priority = System.Threading.ThreadPriority.Highest;
 		connected = true;
 		try
 		{
-			doConnect(host, port);
-			messageHandler.onConnectOK(isMainSession);
+			if (!doConnect(host, port, myGen))
+			{
+				return;
+			}
+			if (myGen == _connGen && messageHandler != null)
+			{
+				messageHandler.onConnectOK(isMainSession);
+			}
 		}
 		catch (Exception)
 		{
-			if (messageHandler != null)
+			if (myGen == _connGen && messageHandler != null)
 			{
 				close();
 				messageHandler.onConnectionFail(isMainSession);
@@ -382,16 +403,22 @@ public class Session_ME2 : ISession
 		}
 	}
 
-	public void doConnect(string host, int port)
+	public bool doConnect(string host, int port, int myGen)
 	{
-		sc = FakeProxy.ConnectThroughConfiguredProxy(host, port);
+		TcpClient tcp = FakeProxy.ConnectThroughConfiguredProxy(host, port);
+		if (myGen != _connGen)
+		{
+			try { tcp.Close(); } catch { }
+			return false;
+		}
+		sc = tcp;
 		dataStream = sc.GetStream();
 		dis = new BinaryReader(dataStream, new UTF8Encoding());
 		dos = new BinaryWriter(dataStream, new UTF8Encoding());
 		sendThread = new Thread(sender.run);
 		sendThread.IsBackground = true;
 		sendThread.Start();
-		MessageCollector @object = new MessageCollector();
+		MessageCollector @object = new MessageCollector(myGen);
 		Cout.LogError("new -----");
 		collectorThread = new Thread(@object.run);
 		collectorThread.IsBackground = true;
@@ -399,6 +426,7 @@ public class Session_ME2 : ISession
 		timeConnected = currentTimeMillis();
 		connecting = false;
 		doSendMessage(new Message(-27));
+		return true;
 	}
 
 	public void sendMessage(Message message)
@@ -549,13 +577,26 @@ public class Session_ME2 : ISession
 
 	private static void cleanNetwork()
 	{
+		Interlocked.Increment(ref _connGen);
 		key = null;
 		curR = 0;
 		curW = 0;
+		getKeyComplete = false;
 		try
 		{
 			connected = false;
 			connecting = false;
+			if (sender != null)
+			{
+				sender.Clear();
+			}
+			if (recieveMsg != null)
+			{
+				lock (recvLock)
+				{
+					recieveMsg.removeAllElements();
+				}
+			}
 			if (sc != null)
 			{
 				try { sc.Close(); } catch { }

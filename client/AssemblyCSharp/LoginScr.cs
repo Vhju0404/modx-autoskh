@@ -451,16 +451,7 @@ public class LoginScr : mScreen, IActionListener
 			{
 				return;
 			}
-			GameCanvas.connect();
-			Service.gI().login("", "", GameMidlet.VERSION, 0);
-			if (Session_ME.connected)
-			{
-				GameCanvas.startWaitDlg();
-			}
-			else
-			{
-				GameCanvas.startOKDlg(mResources.maychutathoacmatsong);
-			}
+			AssemblyCSharp.Mod.GameEvents.RequestAutoLogin();
 			return;
 		}
 		string text = Rms.loadRMSString("acc");

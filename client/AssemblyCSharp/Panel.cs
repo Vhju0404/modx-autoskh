@@ -6908,6 +6908,12 @@ public class Panel : IActionListener, IChatable
 		vItemCombine.removeAllElements();
 	}
 
+	public void ForceHide()
+	{
+		timeShow = 0;
+		hide();
+	}
+
 	public void hideNow()
 	{
 		if (timeShow > 0)

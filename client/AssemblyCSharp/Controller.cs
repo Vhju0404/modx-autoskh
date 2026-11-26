@@ -5005,8 +5005,13 @@ public class Controller : IMessageHandler
 			loadCurrMap(teleport);
 			Char.isLoadingMap = false;
 			GameCanvas.debug("SA75x8", 2);
-			Resources.UnloadUnusedAssets();
-			GC.Collect();
+			long nowMapMs = mSystem.currentTimeMillis();
+			if (nowMapMs - _lastMapGcAt >= 180000L)
+			{
+				_lastMapGcAt = nowMapMs;
+				Resources.UnloadUnusedAssets();
+				GC.Collect();
+			}
 			Cout.LogError("----------DA CHAY XONG LOAD INFO MAP");
 		}
 		catch (Exception ex)
@@ -5015,6 +5020,8 @@ public class Controller : IMessageHandler
 			Pk9rXmap.FixBlackScreen();
 		}
 	}
+
+	private static long _lastMapGcAt;
 
 	public void keyValueAction(string key, string value)
 	{

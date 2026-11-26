@@ -662,12 +662,7 @@ func (a *App) StopAllTabs() {
 }
 
 func (a *App) RestartSelected(ids []string) {
-	go func() {
-		a.mgr.StopAccounts(ids)
-		time.Sleep(600 * time.Millisecond)
-		a.mgr.ResetCircuitBreaker(ids)
-		a.mgr.StartAccounts(ids)
-	}()
+	a.mgr.RestartAccounts(ids)
 }
 
 func (a *App) SendHotCommand(ids []string, cmd string, arg string) int {

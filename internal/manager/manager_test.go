@@ -1,11 +1,15 @@
 package manager
 
 import (
+	"fmt"
+	"io"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 
 	"hteam/modx-autoskh/internal/model"
+	"hteam/modx-autoskh/internal/store"
 )
 
 func TestIsInAnyTimeWindowMultiShiftAndOvernight(t *testing.T) {
@@ -131,5 +135,91 @@ func TestCollectNewlyDroppedSKHNoFalseAlertOnStoreAndDetectsSecondCopy(t *testin
 	gotPants := collectNewlyDroppedSKH(maxSeen, []model.LootItem{aoKakarotBox, aoKakarotBox, quanKakarotBag})
 	if len(gotPants) != 1 || gotPants[0].Slot != "Quần" {
 		t.Fatalf("expected 1 new drop for Quần Kakarot, got %+v", gotPants)
+	}
+}
+
+func TestProbeNROHandshakeViaHTTPProxy(t *testing.T) {
+	nroLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen nro: %v", err)
+	}
+	defer nroLn.Close()
+	go func() {
+		conn, err := nroLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var req [3]byte
+		if _, err := io.ReadFull(conn, req[:]); err == nil && req[0] == 0xE5 {
+			_, _ = conn.Write([]byte{0xE5, 0x00, 0x05, 0x04, 1, 2, 3, 4})
+		}
+	}()
+	nHost, nPortStr, _ := net.SplitHostPort(nroLn.Addr().String())
+	nPort, _ := strconv.Atoi(nPortStr)
+
+	prxLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen proxy: %v", err)
+	}
+	defer prxLn.Close()
+	go func() {
+		clientConn, err := prxLn.Accept()
+		if err != nil {
+			return
+		}
+		defer clientConn.Close()
+		buf := make([]byte, 512)
+		_, _ = clientConn.Read(buf)
+		upConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", nHost, nPort))
+		if err != nil {
+			return
+		}
+		defer upConn.Close()
+		_, _ = clientConn.Write([]byte("HTTP/1.1 200 OK\r\nX-Proxy: test\r\n\r\n"))
+		go io.Copy(upConn, clientConn)
+		_, _ = io.Copy(clientConn, upConn)
+	}()
+	pHost, pPortStr, _ := net.SplitHostPort(prxLn.Addr().String())
+	pPort, _ := strconv.Atoi(pPortStr)
+
+	ok := ProbeNROHandshakeViaProxy(model.ProxyItem{Type: "http", Host: pHost, Port: pPort}, nHost, nPort, 3*time.Second)
+	if !ok {
+		t.Fatal("expected ProbeNROHandshakeViaProxy to succeed through HTTP CONNECT tunnel")
+	}
+}
+
+func TestStopAllTabsConcurrentClearsStateCleanly(t *testing.T) {
+	st, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	m := New(st, nil)
+	defer m.cancel()
+
+	for i := 0; i < 25; i++ {
+		id := fmt.Sprintf("acc_%d", i)
+		m.desiredRunning[id] = true
+		m.launchModeOverride[id] = "headless"
+		m.runtimes[id] = &model.AccountRuntime{
+			AccountID: id,
+			Running:   true,
+			Headless:  true,
+			FSMState:  "FARM",
+		}
+	}
+
+	start := time.Now()
+	m.StopAllTabs()
+	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
+		t.Fatalf("StopAllTabs took too long: %v", elapsed)
+	}
+	if len(m.desiredRunning) != 0 || len(m.launchModeOverride) != 0 {
+		t.Fatalf("expected desiredRunning and launchModeOverride cleared, got %d / %d", len(m.desiredRunning), len(m.launchModeOverride))
+	}
+	for id, rt := range m.runtimes {
+		if rt.Running || rt.FSMState != "IDLE" {
+			t.Fatalf("expected runtime %s stopped/IDLE, got running=%v state=%s", id, rt.Running, rt.FSMState)
+		}
 	}
 }

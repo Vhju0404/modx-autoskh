@@ -9,6 +9,17 @@ namespace AssemblyCSharp.Mod
 {
     public static class FakeProxy
     {
+        private static TcpClient ApplySocketTimeouts(TcpClient cli)
+        {
+            if (cli != null)
+            {
+                cli.NoDelay = true;
+                cli.ReceiveTimeout = 90000;
+                cli.SendTimeout = 30000;
+            }
+            return cli;
+        }
+
         public static TcpClient ProxyFaker(ProxyType proxyType, string targetHost, int targetPort, string proxyHost, int proxyPort, string user, string password)
         {
             ProxyClientFactory factory = new ProxyClientFactory();
@@ -16,9 +27,9 @@ namespace AssemblyCSharp.Mod
                 ? factory.CreateProxyClient(proxyType, proxyHost, proxyPort)
                 : factory.CreateProxyClient(proxyType, proxyHost, proxyPort, user, password ?? string.Empty);
 
-            proxyClient.ReceiveTimeout = 60000;
-            proxyClient.SendTimeout = 60000;
-            return proxyClient.CreateConnection(targetHost, targetPort);
+            proxyClient.ReceiveTimeout = 20000;
+            proxyClient.SendTimeout = 20000;
+            return ApplySocketTimeouts(proxyClient.CreateConnection(targetHost, targetPort));
         }
 
         public static TcpClient ConnectThroughConfiguredProxy(string targetHost, int targetPort)
@@ -27,8 +38,14 @@ namespace AssemblyCSharp.Mod
             if (string.IsNullOrEmpty(raw) || string.Equals(raw, "home", StringComparison.OrdinalIgnoreCase))
             {
                 TcpClient direct = new TcpClient();
-                direct.Connect(targetHost, targetPort);
-                return direct;
+                IAsyncResult ar = direct.BeginConnect(targetHost, targetPort, null, null);
+                if (!ar.AsyncWaitHandle.WaitOne(15000, false))
+                {
+                    try { direct.Close(); } catch { }
+                    throw new SocketException(10060);
+                }
+                direct.EndConnect(ar);
+                return ApplySocketTimeouts(direct);
             }
 
             ProxyType proxyType = string.Equals(LoadData.Account.proxyType, "socks5", StringComparison.OrdinalIgnoreCase)

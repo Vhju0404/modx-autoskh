@@ -58,7 +58,14 @@ namespace AssemblyCSharp.Mod
 
         private static void CloseNpcUi()
         {
-            try { if (GameCanvas.panel != null && GameCanvas.panel.isShow) GameCanvas.panel.hide(); } catch { }
+            try
+            {
+                if (GameCanvas.panel != null && GameCanvas.panel.isShow)
+                {
+                    GameCanvas.panel.ForceHide();
+                }
+            }
+            catch { }
             try { if (GameCanvas.menu != null && GameCanvas.menu.showMenu) GameCanvas.menu.doCloseMenu(); } catch { }
             try { ChatPopup.currChatPopup = null; } catch { }
         }
@@ -762,14 +769,15 @@ namespace AssemblyCSharp.Mod
                     if (item != null && GameEvents.ShouldSellItem(item))
                     {
                         lastBagOpAt = now;
+                        short bagIdx = (short)(item.indexUI >= 0 ? item.indexUI : i);
                         SetState("SELL", "Bán rác: " + item.template.name);
-                        Service.gI().saleItem(0, 1, (sbyte)i);
-                        Service.gI().saleItem(1, 1, (sbyte)i);
+                        Service.gI().saleItem(0, 1, bagIdx);
+                        Service.gI().saleItem(1, 1, bagIdx);
                         return;
                     }
                 }
                 isSellMode = false;
-                GameCanvas.panel.hide();
+                GameCanvas.panel.ForceHide();
                 SetState("TRAVEL", "Đã bán sạch đồ rác");
                 return;
             }

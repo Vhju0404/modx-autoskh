@@ -404,11 +404,104 @@ func (m *Manager) startOneInternal(accountID string, alreadyLockedLaunch bool) e
 	return nil
 }
 
-// StopAccounts tắt 1 danh sách tài khoản theo yêu cầu người dùng (hủy tự mở lại 24/7).
+// StopAccounts tắt 1 danh sách tài khoản theo yêu cầu người dùng (hủy tự mở lại 24/7, chạy song song siêu nhanh).
 func (m *Manager) StopAccounts(ids []string) {
-	for _, id := range ids {
-		m.stopOneInternal(id, "Người dùng dừng", false)
+	if len(ids) == 0 {
+		return
 	}
+	if len(ids) == 1 {
+		m.stopOneInternal(ids[0], "Người dùng dừng", false)
+		return
+	}
+	sem := make(chan struct{}, 32)
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		accID := id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			m.stopOneNoNotify(accID, "Người dùng dừng", false)
+		}()
+	}
+	wg.Wait()
+	m.notifyUI()
+}
+
+// RestartAccounts khởi động lại 1 hoặc nhiều tài khoản nhưng GIỮ NGUYÊN chế độ hiện tại (👻 Headless hoặc 👁 Có cửa sổ).
+func (m *Manager) RestartAccounts(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	go func() {
+		cfg := m.store.GetSettings()
+		anyVisible := false
+		for i, id := range ids {
+			m.mu.Lock()
+			if m.launching[id] {
+				m.mu.Unlock()
+				continue
+			}
+			m.launching[id] = true
+			savedMode := m.launchModeOverride[id]
+			if savedMode == "" {
+				if rt, ok := m.runtimes[id]; ok && rt.Running {
+					if rt.Headless {
+						savedMode = "headless"
+					} else {
+						savedMode = "visible"
+					}
+				}
+			}
+			wasRunning := false
+			if rt, ok := m.runtimes[id]; ok && (rt.Running || rt.PID > 0) {
+				wasRunning = true
+			}
+			delete(m.desiredRunning, id)
+			m.mu.Unlock()
+
+			func() {
+				defer func() {
+					m.mu.Lock()
+					delete(m.launching, id)
+					m.mu.Unlock()
+				}()
+				if wasRunning {
+					m.stopOneNoNotify(id, "Đang khởi động lại tab...", false)
+					select {
+					case <-time.After(1500 * time.Millisecond):
+					case <-m.ctx.Done():
+						return
+					}
+				}
+				m.mu.Lock()
+				if savedMode != "" {
+					m.launchModeOverride[id] = savedMode
+				}
+				m.mu.Unlock()
+				m.ResetCircuitBreaker([]string{id})
+				if err := m.startOneInternal(id, true); err != nil {
+					m.addLog("ERROR", id, err.Error())
+				} else if savedMode != "headless" {
+					anyVisible = true
+				}
+			}()
+
+			if i < len(ids)-1 {
+				delay := randomDelayMs(cfg.LoginDelayMinMs, cfg.LoginDelayMaxMs)
+				select {
+				case <-time.After(delay):
+				case <-m.ctx.Done():
+					return
+				}
+			}
+		}
+		if anyVisible && cfg.AutoArrangeGrid {
+			time.Sleep(800 * time.Millisecond)
+			m.ArrangeAllWindows()
+		}
+	}()
 }
 
 // PurgeAccounts dừng tab, ngắt socket và xóa sạch mọi state RAM + file runtime của acc bị xóa.
@@ -475,6 +568,11 @@ func (m *Manager) StopOne(accountID string, reason string) {
 }
 
 func (m *Manager) stopOneInternal(accountID string, reason string, keepDesired bool) {
+	m.stopOneNoNotify(accountID, reason, keepDesired)
+	m.notifyUI()
+}
+
+func (m *Manager) stopOneNoNotify(accountID string, reason string, keepDesired bool) {
 	m.mu.Lock()
 	if !keepDesired {
 		delete(m.desiredRunning, accountID)
@@ -510,7 +608,6 @@ func (m *Manager) stopOneInternal(accountID string, reason string, keepDesired b
 	if acc, ok := m.store.GetAccountByID(accountID); ok && pid > 0 {
 		m.addLog("INFO", acc.Username, fmt.Sprintf("Đã đóng tab (%s)", reason))
 	}
-	m.notifyUI()
 }
 
 func (m *Manager) StopAllTabs() {
@@ -529,11 +626,27 @@ func (m *Manager) stopAllTabsInternal(reason string, keepDesired bool) {
 	if !keepDesired {
 		m.mu.Lock()
 		m.desiredRunning = make(map[string]bool)
+		m.launchModeOverride = make(map[string]string)
 		m.mu.Unlock()
 	}
-	for _, id := range ids {
-		m.stopOneInternal(id, reason, keepDesired)
+	if len(ids) == 0 {
+		return
 	}
+	// Đóng song song toàn bộ tab (30 tab hoàn tất trong <= 700ms thay vì nối đuôi 21 giây!)
+	sem := make(chan struct{}, 32)
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		accID := id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			m.stopOneNoNotify(accID, reason, keepDesired)
+		}()
+	}
+	wg.Wait()
+	m.notifyUI()
 }
 
 // SendHotCommand gửi lệnh nóng trực tiếp qua Socket không cần tắt game.
@@ -1718,18 +1831,18 @@ func (m *Manager) tickSupervisor() {
 	}
 }
 
-func (m *Manager) resolveProxyForAccount(acc model.Account, cfg model.AppSettings) (string, string, string) {
+func (m *Manager) resolveProxyItemForAccount(acc model.Account, cfg model.AppSettings) (model.ProxyItem, bool, string) {
 	if strings.TrimSpace(acc.CustomProxy) != "" {
 		if cp, err := proxy.ParseLine(acc.CustomProxy, "http"); err == nil {
-			return proxy.FormatForClient(cp), cp.Type, fmt.Sprintf("%s:%d (riêng)", cp.Host, cp.Port)
+			return cp, true, fmt.Sprintf("%s:%d (riêng)", cp.Host, cp.Port)
 		}
 	}
 	if acc.ProxyID == "home" {
-		return "home", "http", "Home"
+		return model.ProxyItem{}, false, "Home"
 	}
 	proxies := m.store.GetProxies()
 	if len(proxies) == 0 {
-		return "home", "http", "Home"
+		return model.ProxyItem{}, false, "Home"
 	}
 
 	// Nếu chỉ định proxy cố định
@@ -1737,7 +1850,7 @@ func (m *Manager) resolveProxyForAccount(acc model.Account, cfg model.AppSetting
 		for _, p := range proxies {
 			if p.ID == acc.ProxyID {
 				if p.Status != "die" || !cfg.AutoRotateProxy {
-					return proxy.FormatForClient(p), p.Type, fmt.Sprintf("%s:%d", p.Host, p.Port)
+					return p, true, fmt.Sprintf("%s:%d", p.Host, p.Port)
 				}
 				break
 			}
@@ -1747,7 +1860,7 @@ func (m *Manager) resolveProxyForAccount(acc model.Account, cfg model.AppSetting
 	// Phân bổ tự động theo MaxAccPerProxy (ưu tiên proxy live hoặc unknown, bỏ qua proxy die)
 	maxPer := cfg.MaxAccPerProxy
 	if maxPer <= 0 {
-		return "home", "http", "Home"
+		return model.ProxyItem{}, false, "Home"
 	}
 	candidates := make([]model.ProxyItem, 0, len(proxies))
 	for _, p := range proxies {
@@ -1756,7 +1869,7 @@ func (m *Manager) resolveProxyForAccount(acc model.Account, cfg model.AppSetting
 		}
 	}
 	if len(candidates) == 0 {
-		return "home", "http", "Home (Hết proxy live)"
+		return model.ProxyItem{}, false, "Home (Hết proxy live)"
 	}
 
 	// Tìm vị trí acc trong danh sách để phân đều ổn định
@@ -1769,7 +1882,15 @@ func (m *Manager) resolveProxyForAccount(acc model.Account, cfg model.AppSetting
 		}
 	}
 	chosen := candidates[(accIdx/maxPer)%len(candidates)]
-	return proxy.FormatForClient(chosen), chosen.Type, fmt.Sprintf("%s:%d", chosen.Host, chosen.Port)
+	return chosen, true, fmt.Sprintf("%s:%d", chosen.Host, chosen.Port)
+}
+
+func (m *Manager) resolveProxyForAccount(acc model.Account, cfg model.AppSettings) (string, string, string) {
+	item, ok, label := m.resolveProxyItemForAccount(acc, cfg)
+	if !ok {
+		return "home", "http", label
+	}
+	return proxy.FormatForClient(item), item.Type, label
 }
 
 func (m *Manager) recordRestart(accountID string) {
@@ -1914,44 +2035,84 @@ func randomDelayMs(minMs, maxMs int) time.Duration {
 	return time.Duration(minMs+rand.Intn(delta+1)) * time.Millisecond
 }
 
-// probeAnyServerPort dò nhẹ cổng TCP của máy chủ NRO đang được dàn acc dùng (không mở tab game).
+// probeAnyServerPort dò nhẹ cổng TCP của máy chủ NRO đang được dàn acc dùng (hỗ trợ xuyên qua Proxy nếu IP gốc VPS bị chặn).
 func (m *Manager) probeAnyServerPort() bool {
+	type probeTarget struct {
+		host     string
+		port     int
+		prx      model.ProxyItem
+		useProxy bool
+	}
+	cfg := m.store.GetSettings()
 	seen := make(map[string]bool)
-	addrs := make([]string, 0, 4)
+	targets := make([]probeTarget, 0, 6)
+
 	for _, acc := range m.store.GetAccounts() {
-		if sv, ok := m.store.GetServerByID(acc.ServerID); ok && sv.Host != "" {
-			port := sv.Port
-			if port <= 0 {
-				port = 14445
-			}
-			addr := fmt.Sprintf("%s:%d", sv.Host, port)
-			if !seen[addr] {
-				seen[addr] = true
-				addrs = append(addrs, addr)
+		sv, ok := m.store.GetServerByID(acc.ServerID)
+		if !ok || sv.Host == "" {
+			continue
+		}
+		port := sv.Port
+		if port <= 0 {
+			port = 14445
+		}
+		prxItem, hasPrx, _ := m.resolveProxyItemForAccount(acc, cfg)
+		if hasPrx {
+			key := fmt.Sprintf("%s:%d@%s:%d", sv.Host, port, prxItem.Host, prxItem.Port)
+			if !seen[key] && len(targets) < 6 {
+				seen[key] = true
+				targets = append(targets, probeTarget{host: sv.Host, port: port, prx: prxItem, useProxy: true})
 			}
 		}
+		directKey := fmt.Sprintf("direct|%s:%d", sv.Host, port)
+		if !seen[directKey] && len(targets) < 8 {
+			seen[directKey] = true
+			targets = append(targets, probeTarget{host: sv.Host, port: port})
+		}
 	}
-	if len(addrs) == 0 {
+	if len(targets) == 0 {
 		for _, sv := range m.store.GetServers() {
 			if sv.Host != "" {
 				port := sv.Port
 				if port <= 0 {
 					port = 14445
 				}
-				addrs = append(addrs, fmt.Sprintf("%s:%d", sv.Host, port))
+				targets = append(targets, probeTarget{host: sv.Host, port: port})
 				break
 			}
 		}
 	}
-	if len(addrs) == 0 {
+	if len(targets) == 0 {
 		return true
 	}
-	for _, addr := range addrs {
-		if ProbeNROHandshake(addr, 3500*time.Millisecond) {
-			return true
+	for _, t := range targets {
+		if t.useProxy {
+			if ProbeNROHandshakeViaProxy(t.prx, t.host, t.port, 5*time.Second) {
+				return true
+			}
+		} else {
+			addr := fmt.Sprintf("%s:%d", t.host, t.port)
+			if ProbeNROHandshake(addr, 3500*time.Millisecond) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// ProbeNROHandshakeViaProxy kiểm tra bắt tay cmd -27 của máy chủ NRO xuyên qua Proxy HTTP/SOCKS5.
+func ProbeNROHandshakeViaProxy(p model.ProxyItem, host string, port int, timeout time.Duration) bool {
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	conn, err := proxy.DialTarget(ctx, p, host, port, timeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	return ProbeNROHandshakeOnConn(conn, timeout)
 }
 
 // ProbeNROHandshake kiểm tra TCP + bắt tay chuẩn giao thức NRO (cmd -27 = 0xE5 xin session key).
@@ -1962,6 +2123,11 @@ func ProbeNROHandshake(addr string, timeout time.Duration) bool {
 		return false
 	}
 	defer conn.Close()
+	return ProbeNROHandshakeOnConn(conn, timeout)
+}
+
+// ProbeNROHandshakeOnConn thực thi trao đổi gói cmd -27 trên 1 kết nối TCP/Tunnel đã mở sẵn.
+func ProbeNROHandshakeOnConn(conn net.Conn, timeout time.Duration) bool {
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	// Gửi gói cmd -27 (GET_SESSION_ID): [0xE5, 0x00, 0x00]

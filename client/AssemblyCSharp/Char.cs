@@ -1418,17 +1418,23 @@ public class Char : IMapObject
 
     public void addInfo(string info)
     {
-        if(info.Contains("con sẽ bảo"))
+        if (!string.IsNullOrEmpty(info) &&
+            AssemblyCSharp.Mod.GameEvents.Profile.IsPetMode &&
+            myCharz() != null &&
+            charID == -myCharz().charID)
         {
-            AutoGame.isPetProtect = true;
-        }
-        if (info.Contains("cho con") && Char.myPetz().cHP > 0)
-        {
-            GameScr.gI().doUseHP();
-        }
-        if (info.Contains("Sao sư phụ không đánh đi")){
-
-            AutoGame.isSaoMayLuoiThe = true;
+            if (info.Contains("con sẽ bảo"))
+            {
+                AutoGame.isPetProtect = true;
+            }
+            if (info.Contains("cho con") && myPet != null && myPet.cHP > 0)
+            {
+                GameScr.gI().doUseHP();
+            }
+            if (info.Contains("Sao sư phụ không đánh đi"))
+            {
+                AutoGame.isSaoMayLuoiThe = true;
+            }
         }
         if (chatInfo == null)
         {
